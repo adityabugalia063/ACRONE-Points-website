@@ -93,12 +93,17 @@ function navigate(urlPath, pushState = true) {
 }
 
 /* ==========================================================================
-   REAL-TIME SERVER-SENT EVENTS (SSE)
+   REAL-TIME SERVER-SENT EVENTS (SSE) & CLOUD SYNC
    ========================================================================== */
+
+let syncMissedEventsTimer = null;
+let lastSyncTimestamp = Date.now();
+const processedEventIds = new Set();
 
 function setupSse(publicPlayerId) {
   closeSse();
 
+  lastSyncTimestamp = Date.now() - 5000;
   const streamUrl = `/api/public/players/${publicPlayerId}/stream`;
   state.sseStatus = 'reconnecting';
   updateSseIndicator();
@@ -108,25 +113,14 @@ function setupSse(publicPlayerId) {
   state.eventSource.addEventListener('connected', () => {
     state.sseStatus = 'connected';
     updateSseIndicator();
+    // Catch up on any events that occurred during connection establishment
+    syncMissedEvents(publicPlayerId);
   });
 
   state.eventSource.addEventListener('inventory_updated', (e) => {
     try {
       const data = JSON.parse(e.data);
-      const isFound = data.delta > 0;
-      const title = isFound ? `Found ${data.itemName}` : `Sold ${data.itemName}`;
-      const msg = isFound 
-        ? `Added +${data.delta} to collection (Total: ×${data.newQuantity})`
-        : `Removed ${Math.abs(data.delta)} from collection (Remaining: ×${data.newQuantity})`;
-
-      showToast(title, msg, data.rarityColor || '#D83C53');
-
-      // Refresh current tab data
-      if (state.activeTab === 'overview') {
-        loadPlayerProfile(publicPlayerId, false);
-      } else if (state.activeTab === data.category) {
-        loadCollectionCategory(publicPlayerId, data.category, false);
-      }
+      handleInventoryUpdateEvent(publicPlayerId, data);
     } catch (err) {
       console.error('SSE Error parsing inventory_updated:', err);
     }
@@ -165,13 +159,78 @@ function setupSse(publicPlayerId) {
   state.eventSource.onerror = () => {
     state.sseStatus = 'reconnecting';
     updateSseIndicator();
+    // Poll missed events during reconnection
+    syncMissedEvents(publicPlayerId);
   };
+
+  // Periodic fallback synchronization for multi-instance serverless resilience
+  syncMissedEventsTimer = setInterval(() => {
+    if (state.publicPlayerId === publicPlayerId && !document.hidden) {
+      syncMissedEvents(publicPlayerId);
+    }
+  }, 8000);
+}
+
+function handleInventoryUpdateEvent(publicPlayerId, data) {
+  const isFound = data.delta > 0;
+  const title = isFound ? `Found ${data.itemName}` : `Sold ${data.itemName}`;
+  const msg = isFound 
+    ? `Added +${data.delta} to collection (Total: ×${data.newQuantity})`
+    : `Removed ${Math.abs(data.delta)} from collection (Remaining: ×${data.newQuantity})`;
+
+  showToast(title, msg, data.rarityColor || '#D83C53');
+
+  // Refresh current tab data
+  if (state.activeTab === 'overview') {
+    loadPlayerProfile(publicPlayerId, false);
+  } else if (state.activeTab === data.category) {
+    loadCollectionCategory(publicPlayerId, data.category, false);
+  }
+}
+
+async function syncMissedEvents(publicPlayerId) {
+  if (!publicPlayerId) return;
+  try {
+    const res = await fetch(`/api/public/players/${publicPlayerId}/events?since=${lastSyncTimestamp}`);
+    if (!res.ok) return;
+    const json = await res.json();
+    if (!json.events || json.events.length === 0) return;
+
+    for (const ev of json.events) {
+      if (processedEventIds.has(ev.id)) continue;
+      processedEventIds.add(ev.id);
+      if (processedEventIds.size > 200) {
+        const oldest = processedEventIds.values().next().value;
+        processedEventIds.delete(oldest);
+      }
+
+      lastSyncTimestamp = Math.max(lastSyncTimestamp, ev.occurredAt || Date.now());
+
+      const isFound = ev.delta > 0;
+      const title = isFound ? `Found ${ev.itemName}` : `Sold ${ev.itemName}`;
+      const msg = isFound ? `Added +${ev.delta} to collection` : `Sold ${Math.abs(ev.delta)} item`;
+      showToast(title, msg, ev.rarityColor || '#D83C53');
+    }
+
+    // Refresh current view with fresh stats
+    if (state.activeTab === 'overview') {
+      loadPlayerProfile(publicPlayerId, false);
+    } else if (['fish', 'mining', 'chest'].includes(state.activeTab)) {
+      loadCollectionCategory(publicPlayerId, state.activeTab, false);
+    }
+  } catch (_) {
+    // Non-blocking background catch-up
+  }
 }
 
 function closeSse() {
   if (state.eventSource) {
     state.eventSource.close();
     state.eventSource = null;
+  }
+  if (syncMissedEventsTimer) {
+    clearInterval(syncMissedEventsTimer);
+    syncMissedEventsTimer = null;
   }
   state.sseStatus = 'disconnected';
   updateSseIndicator();

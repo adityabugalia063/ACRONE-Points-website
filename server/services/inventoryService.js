@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { getDb } from '../db/index.js';
+import { queryOne, queryAll, execute, withTransaction } from '../db/index.js';
 import { PlayerService } from './playerService.js';
 import { AchievementService } from './achievementService.js';
 import { sseService } from './sseService.js';
@@ -9,7 +9,7 @@ export class InventoryService {
    * Records a found or dropped item idempotently.
    * Duplicate submissions with the same eventId return the cached response.
    */
-  static recordCollectionEvent({
+  static async recordCollectionEvent({
     eventId,
     youtubeChannelId,
     itemId,
@@ -21,36 +21,37 @@ export class InventoryService {
     if (!eventId) throw new Error('eventId is required as an idempotency key');
     if (!youtubeChannelId) throw new Error('youtubeChannelId is required');
     if (!itemId) throw new Error('itemId is required');
-    if (quantity <= 0) throw new Error('quantity must be positive');
+    const parsedQty = parseInt(quantity, 10);
+    if (isNaN(parsedQty) || parsedQty <= 0) throw new Error('quantity must be a positive integer');
 
-    const db = getDb();
     const eventTime = occurredAt ? parseInt(occurredAt, 10) : Date.now();
     const now = Date.now();
 
     // 1. Idempotency Check: Check if eventId was already processed
-    const existingEvent = db.prepare('SELECT * FROM collection_events WHERE id = ?').get(eventId);
+    const existingEvent = await queryOne('SELECT * FROM collection_events WHERE id = ?', [eventId]);
     if (existingEvent) {
-      const player = db.prepare('SELECT public_player_id FROM players WHERE id = ?').get(existingEvent.player_id);
-      const item = db.prepare(`
-        SELECT ci.id, ci.name, ci.category, r.name as rarity_name, pi.quantity
-        FROM catalog_items ci
-        JOIN rarities r ON ci.rarity_id = r.id
-        LEFT JOIN player_inventory pi ON pi.item_id = ci.id AND pi.player_id = ?
-        WHERE ci.id = ?
-      `).get(existingEvent.player_id, itemId);
+      const player = await queryOne('SELECT public_player_id FROM players WHERE id = ?', [existingEvent.player_id]);
+      const item = await queryOne(
+        `SELECT ci.id, ci.name, ci.category, r.name as rarity_name, COALESCE(pi.quantity, 0) as quantity
+         FROM catalog_items ci
+         JOIN rarities r ON ci.rarity_id = r.id
+         LEFT JOIN player_inventory pi ON pi.item_id = ci.id AND pi.player_id = ?
+         WHERE ci.id = ?`,
+        [existingEvent.player_id, itemId]
+      );
 
-      const stats = PlayerService.getPlayerStats(existingEvent.player_id);
+      const stats = await PlayerService.getPlayerStats(existingEvent.player_id);
 
       return {
         success: true,
         idempotentReplay: true,
         publicPlayerId: player ? player.public_player_id : null,
         item: {
-          id: item.id,
-          name: item.name,
-          category: item.category,
-          rarity: item.rarity_name,
-          newQuantity: item.quantity || 0,
+          id: item?.id || itemId,
+          name: item?.name || itemId,
+          category: item?.category || 'fish',
+          rarity: item?.rarity_name || 'common',
+          newQuantity: item?.quantity || 0,
           wasFirstDiscovery: false
         },
         stats
@@ -58,60 +59,67 @@ export class InventoryService {
     }
 
     // 2. Resolve player (or auto-create with minimal placeholder)
-    let player = db.prepare('SELECT * FROM players WHERE youtube_channel_id = ?').get(youtubeChannelId);
+    let player = await queryOne('SELECT * FROM players WHERE youtube_channel_id = ?', [youtubeChannelId]);
     if (!player) {
-      const created = PlayerService.upsertPlayer({
+      const created = await PlayerService.upsertPlayer({
         youtubeChannelId,
         displayName: 'Collector_' + youtubeChannelId.slice(-4),
         avatarUrl: ''
       });
-      player = db.prepare('SELECT * FROM players WHERE id = ?').get(created.id);
+      player = await queryOne('SELECT * FROM players WHERE id = ?', [created.id]);
     }
 
     // 3. Verify item exists in catalogue
-    const itemCatalog = db.prepare(`
-      SELECT ci.*, r.name as rarity_name, r.display_color as rarity_color
-      FROM catalog_items ci
-      JOIN rarities r ON ci.rarity_id = r.id
-      WHERE ci.id = ?
-    `).get(itemId);
+    const itemCatalog = await queryOne(
+      `SELECT ci.*, r.name as rarity_name, r.display_color as rarity_color
+       FROM catalog_items ci
+       JOIN rarities r ON ci.rarity_id = r.id
+       WHERE ci.id = ?`,
+      [itemId]
+    );
 
     if (!itemCatalog) {
       throw new Error(`Catalogue item '${itemId}' does not exist`);
     }
 
     // 4. Update or Insert Player Inventory
-    const existingInv = db.prepare('SELECT quantity FROM player_inventory WHERE player_id = ? AND item_id = ?').get(player.id, itemId);
+    const existingInv = await queryOne(
+      'SELECT quantity FROM player_inventory WHERE player_id = ? AND item_id = ?',
+      [player.id, itemId]
+    );
 
-    let newQuantity = quantity;
+    let newQuantity = parsedQty;
     let wasFirstDiscovery = true;
 
     if (existingInv) {
-      wasFirstDiscovery = (existingInv.quantity === 0);
-      newQuantity = existingInv.quantity + quantity;
-      db.prepare(`
-        UPDATE player_inventory 
-        SET quantity = ?, last_found_at = ?, updated_at = ?
-        WHERE player_id = ? AND item_id = ?
-      `).run(newQuantity, eventTime, now, player.id, itemId);
+      wasFirstDiscovery = existingInv.quantity === 0;
+      newQuantity = existingInv.quantity + parsedQty;
+      await execute(
+        `UPDATE player_inventory 
+         SET quantity = ?, last_found_at = ?, updated_at = ?
+         WHERE player_id = ? AND item_id = ?`,
+        [newQuantity, eventTime, now, player.id, itemId]
+      );
     } else {
-      db.prepare(`
-        INSERT INTO player_inventory (player_id, item_id, quantity, first_found_at, last_found_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `).run(player.id, itemId, newQuantity, eventTime, eventTime, now);
+      await execute(
+        `INSERT INTO player_inventory (player_id, item_id, quantity, first_found_at, last_found_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [player.id, itemId, newQuantity, eventTime, eventTime, now]
+      );
     }
 
     // 5. Insert Collection Event Ledger Entry
-    db.prepare(`
-      INSERT INTO collection_events (id, player_id, item_id, event_type, quantity_delta, source, reference_id, occurred_at, received_at)
-      VALUES (?, ?, ?, 'found', ?, ?, ?, ?, ?)
-    `).run(eventId, player.id, itemId, quantity, source, referenceId || null, eventTime, now);
+    await execute(
+      `INSERT INTO collection_events (id, player_id, item_id, event_type, quantity_delta, source, reference_id, occurred_at, received_at)
+       VALUES (?, ?, ?, 'found', ?, ?, ?, ?, ?)`,
+      [eventId, player.id, itemId, parsedQty, source, referenceId || null, eventTime, now]
+    );
 
     // 6. Evaluate Achievements
-    const { awarded } = AchievementService.evaluatePlayerAchievements(player.id);
+    const { awarded } = await AchievementService.evaluatePlayerAchievements(player.id);
 
     // 7. Calculate updated player statistics
-    const stats = PlayerService.getPlayerStats(player.id);
+    const stats = await PlayerService.getPlayerStats(player.id);
 
     // 8. Broadcast Real-time Server-Sent Events to open profiles
     sseService.broadcastToPlayer(player.public_player_id, 'inventory_updated', {
@@ -121,7 +129,7 @@ export class InventoryService {
       category: itemCatalog.category,
       rarity: itemCatalog.rarity_name,
       rarityColor: itemCatalog.rarity_color,
-      delta: quantity,
+      delta: parsedQty,
       newQuantity,
       isDiscovered: true,
       wasFirstDiscovery,
@@ -153,18 +161,18 @@ export class InventoryService {
   /**
    * Two-Phase Sale: Phase 1 (Reserve items before bot credits points)
    */
-  static reserveSale({ reservationId, youtubeChannelId, itemId, quantity = 1 }) {
+  static async reserveSale({ reservationId, youtubeChannelId, itemId, quantity = 1 }) {
     if (!reservationId) throw new Error('reservationId is required');
     if (!youtubeChannelId) throw new Error('youtubeChannelId is required');
     if (!itemId) throw new Error('itemId is required');
-    if (quantity <= 0) throw new Error('quantity must be positive');
+    const parsedQty = parseInt(quantity, 10);
+    if (isNaN(parsedQty) || parsedQty <= 0) throw new Error('quantity must be a positive integer');
 
-    const db = getDb();
     const now = Date.now();
-    const expiresAt = now + 60000; // 60 seconds reservation window
+    const expiresAt = now + 60000; // 60-second reservation window
 
     // Check if reservation already exists (idempotent reserve call)
-    const existingRes = db.prepare('SELECT * FROM sales_reservations WHERE id = ?').get(reservationId);
+    const existingRes = await queryOne('SELECT * FROM sales_reservations WHERE id = ?', [reservationId]);
     if (existingRes) {
       return {
         success: true,
@@ -178,28 +186,35 @@ export class InventoryService {
     }
 
     // Resolve player
-    const player = db.prepare('SELECT id, public_player_id FROM players WHERE youtube_channel_id = ?').get(youtubeChannelId);
+    const player = await queryOne(
+      'SELECT id, public_player_id FROM players WHERE youtube_channel_id = ?',
+      [youtubeChannelId]
+    );
     if (!player) throw new Error('Player not found');
 
     // Check item & inventory
-    const item = db.prepare('SELECT id, name, base_sale_value FROM catalog_items WHERE id = ?').get(itemId);
+    const item = await queryOne('SELECT id, name, base_sale_value FROM catalog_items WHERE id = ?', [itemId]);
     if (!item) throw new Error('Catalogue item not found');
 
-    const inv = db.prepare('SELECT quantity FROM player_inventory WHERE player_id = ? AND item_id = ?').get(player.id, itemId);
+    const inv = await queryOne(
+      'SELECT quantity FROM player_inventory WHERE player_id = ? AND item_id = ?',
+      [player.id, itemId]
+    );
     const owned = inv ? inv.quantity : 0;
 
     // Check active unexpired reservations
-    const resRow = db.prepare(`
-      SELECT COALESCE(SUM(quantity), 0) as reserved_total
-      FROM sales_reservations
-      WHERE player_id = ? AND item_id = ? AND status = 'reserved' AND expires_at > ?
-    `).get(player.id, itemId, now);
+    const resRow = await queryOne(
+      `SELECT COALESCE(SUM(quantity), 0) as reserved_total
+       FROM sales_reservations
+       WHERE player_id = ? AND item_id = ? AND status = 'reserved' AND expires_at > ?`,
+      [player.id, itemId, now]
+    );
 
-    const currentlyReserved = resRow ? resRow.reserved_total : 0;
+    const currentlyReserved = Number(resRow?.reserved_total || 0);
     const available = owned - currentlyReserved;
 
-    if (available < quantity) {
-      const err = new Error(`Player owns ${owned} (${currentlyReserved} reserved), but requested to sell ${quantity}`);
+    if (available < parsedQty) {
+      const err = new Error(`Player owns ${owned} (${currentlyReserved} reserved), but requested to sell ${parsedQty}`);
       err.code = 'INSUFFICIENT_QUANTITY';
       err.available = available;
       err.owned = owned;
@@ -207,19 +222,20 @@ export class InventoryService {
     }
 
     // Record reservation
-    db.prepare(`
-      INSERT INTO sales_reservations (id, player_id, item_id, quantity, status, expires_at, created_at, updated_at)
-      VALUES (?, ?, ?, ?, 'reserved', ?, ?, ?)
-    `).run(reservationId, player.id, itemId, quantity, expiresAt, now, now);
+    await execute(
+      `INSERT INTO sales_reservations (id, player_id, item_id, quantity, status, expires_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 'reserved', ?, ?, ?)`,
+      [reservationId, player.id, itemId, parsedQty, expiresAt, now, now]
+    );
 
     return {
       success: true,
       reservationId,
       status: 'reserved',
       itemId,
-      quantityReserved: quantity,
-      remainingAvailable: available - quantity,
-      suggestedSaleValueTotal: (item.base_sale_value || 0) * quantity,
+      quantityReserved: parsedQty,
+      remainingAvailable: available - parsedQty,
+      suggestedSaleValueTotal: (item.base_sale_value || 0) * parsedQty,
       expiresAt
     };
   }
@@ -227,17 +243,14 @@ export class InventoryService {
   /**
    * Two-Phase Sale: Phase 2A (Commit sale after bot successfully credits points)
    */
-  static commitSale({ reservationId }) {
+  static async commitSale({ reservationId }) {
     if (!reservationId) throw new Error('reservationId is required');
 
-    const db = getDb();
     const now = Date.now();
-
-    const reservation = db.prepare('SELECT * FROM sales_reservations WHERE id = ?').get(reservationId);
+    const reservation = await queryOne('SELECT * FROM sales_reservations WHERE id = ?', [reservationId]);
     if (!reservation) throw new Error('Reservation ID not found');
 
     if (reservation.status === 'committed') {
-      // Idempotent commit return
       return {
         success: true,
         status: 'committed',
@@ -251,45 +264,52 @@ export class InventoryService {
     }
 
     if (reservation.expires_at < now) {
-      db.prepare("UPDATE sales_reservations SET status = 'expired', updated_at = ? WHERE id = ?").run(now, reservationId);
+      await execute("UPDATE sales_reservations SET status = 'expired', updated_at = ? WHERE id = ?", [now, reservationId]);
       const err = new Error('Reservation has expired');
       err.code = 'RESERVATION_EXPIRED';
       throw err;
     }
 
     // Deduct inventory
-    const inv = db.prepare('SELECT quantity FROM player_inventory WHERE player_id = ? AND item_id = ?').get(reservation.player_id, reservation.item_id);
+    const inv = await queryOne(
+      'SELECT quantity FROM player_inventory WHERE player_id = ? AND item_id = ?',
+      [reservation.player_id, reservation.item_id]
+    );
     const currentQty = inv ? inv.quantity : 0;
     const newQty = Math.max(0, currentQty - reservation.quantity);
 
-    db.prepare(`
-      UPDATE player_inventory 
-      SET quantity = ?, updated_at = ?
-      WHERE player_id = ? AND item_id = ?
-    `).run(newQty, now, reservation.player_id, reservation.item_id);
+    await execute(
+      `UPDATE player_inventory 
+       SET quantity = ?, updated_at = ?
+       WHERE player_id = ? AND item_id = ?`,
+      [newQty, now, reservation.player_id, reservation.item_id]
+    );
 
     // Update reservation status
-    db.prepare("UPDATE sales_reservations SET status = 'committed', updated_at = ? WHERE id = ?").run(now, reservationId);
+    await execute("UPDATE sales_reservations SET status = 'committed', updated_at = ? WHERE id = ?", [now, reservationId]);
 
     // Record collection sale event
     const saleEventId = 'sale_' + reservationId;
-    db.prepare(`
-      INSERT INTO collection_events (id, player_id, item_id, event_type, quantity_delta, source, reference_id, occurred_at, received_at)
-      VALUES (?, ?, ?, 'sold', ?, 'sale', ?, ?, ?)
-    `).run(saleEventId, reservation.player_id, reservation.item_id, -reservation.quantity, reservationId, now, now);
+    await execute(
+      `INSERT INTO collection_events (id, player_id, item_id, event_type, quantity_delta, source, reference_id, occurred_at, received_at)
+       VALUES (?, ?, ?, 'sold', ?, 'sale', ?, ?, ?)
+       ON CONFLICT(id) DO NOTHING`,
+      [saleEventId, reservation.player_id, reservation.item_id, -reservation.quantity, reservationId, now, now]
+    );
 
     // Evaluate Achievements and revoke any whose threshold is no longer met
-    const { revoked } = AchievementService.evaluatePlayerAchievements(reservation.player_id);
+    const { revoked } = await AchievementService.evaluatePlayerAchievements(reservation.player_id);
 
-    const player = db.prepare('SELECT public_player_id FROM players WHERE id = ?').get(reservation.player_id);
-    const itemCatalog = db.prepare(`
-      SELECT ci.*, r.name as rarity_name, r.display_color as rarity_color
-      FROM catalog_items ci
-      JOIN rarities r ON ci.rarity_id = r.id
-      WHERE ci.id = ?
-    `).get(reservation.item_id);
+    const player = await queryOne('SELECT public_player_id FROM players WHERE id = ?', [reservation.player_id]);
+    const itemCatalog = await queryOne(
+      `SELECT ci.*, r.name as rarity_name, r.display_color as rarity_color
+       FROM catalog_items ci
+       JOIN rarities r ON ci.rarity_id = r.id
+       WHERE ci.id = ?`,
+      [reservation.item_id]
+    );
 
-    const stats = PlayerService.getPlayerStats(reservation.player_id);
+    const stats = await PlayerService.getPlayerStats(reservation.player_id);
     const isStillDiscovered = newQty > 0;
 
     // Broadcast SSE updates
@@ -297,10 +317,10 @@ export class InventoryService {
       sseService.broadcastToPlayer(player.public_player_id, 'inventory_updated', {
         type: 'inventory_updated',
         itemId: reservation.item_id,
-        itemName: itemCatalog.name,
-        category: itemCatalog.category,
-        rarity: itemCatalog.rarity_name,
-        rarityColor: itemCatalog.rarity_color,
+        itemName: itemCatalog?.name || reservation.item_id,
+        category: itemCatalog?.category || 'fish',
+        rarity: itemCatalog?.rarity_name || 'common',
+        rarityColor: itemCatalog?.rarity_color || '#9CA3AF',
         delta: -reservation.quantity,
         newQuantity: newQty,
         isDiscovered: isStillDiscovered,
@@ -322,27 +342,25 @@ export class InventoryService {
       quantitySold: reservation.quantity,
       newQuantity: newQty,
       isStillDiscovered,
-      badgesRevoked: revoked.map(b => b.name)
+      badgesRevoked: revoked.map((b) => b.name)
     };
   }
 
   /**
    * Two-Phase Sale: Phase 2B (Cancel reservation if bot points crediting fails)
    */
-  static cancelSale({ reservationId, reason = '' }) {
+  static async cancelSale({ reservationId, reason = '' }) {
     if (!reservationId) throw new Error('reservationId is required');
 
-    const db = getDb();
     const now = Date.now();
-
-    const reservation = db.prepare('SELECT * FROM sales_reservations WHERE id = ?').get(reservationId);
+    const reservation = await queryOne('SELECT * FROM sales_reservations WHERE id = ?', [reservationId]);
     if (!reservation) throw new Error('Reservation ID not found');
 
     if (reservation.status === 'committed') {
       throw new Error('Cannot cancel an already committed sale');
     }
 
-    db.prepare("UPDATE sales_reservations SET status = 'cancelled', updated_at = ? WHERE id = ?").run(now, reservationId);
+    await execute("UPDATE sales_reservations SET status = 'cancelled', updated_at = ? WHERE id = ?", [now, reservationId]);
 
     return {
       success: true,
@@ -355,19 +373,19 @@ export class InventoryService {
   /**
    * Fetches collection for public display with filtering, discovery state, and sorting.
    */
-  static getCategoryCollection({
+  static async getCategoryCollection({
     publicPlayerId,
     category = 'all',
     rarityFilter = null,
     statusFilter = null,
     sortBy = 'rarity'
   }) {
-    const db = getDb();
-
-    const player = db.prepare('SELECT id, public_player_id, display_name FROM players WHERE public_player_id = ?').get(publicPlayerId);
+    const player = await queryOne(
+      'SELECT id, public_player_id, display_name FROM players WHERE public_player_id = ?',
+      [publicPlayerId]
+    );
     if (!player) return null;
 
-    // Build query for catalog items
     let query = `
       SELECT 
         ci.id, ci.category, ci.name, ci.description, ci.image_url, ci.sort_order, ci.active,
@@ -391,22 +409,20 @@ export class InventoryService {
       params.push(rarityFilter);
     }
 
-    // Sort order
     if (sortBy === 'quantity') {
       query += ` ORDER BY COALESCE(pi.quantity, 0) DESC, r.sort_order DESC, ci.name ASC`;
     } else if (sortBy === 'name') {
       query += ` ORDER BY ci.name ASC`;
     } else {
-      // Default: rarity
       query += ` ORDER BY r.sort_order DESC, ci.sort_order ASC, ci.name ASC`;
     }
 
-    const rows = db.prepare(query).all(...params);
+    const rows = await queryAll(query, params);
 
     let discoveredCount = 0;
     let totalCount = 0;
 
-    const mappedItems = rows.map(r => {
+    const mappedItems = rows.map((r) => {
       const isDiscovered = r.quantity > 0;
       if (isDiscovered) discoveredCount++;
       totalCount++;
@@ -427,15 +443,15 @@ export class InventoryService {
       };
     });
 
-    // Apply status filter in memory if requested
     let filteredItems = mappedItems;
     if (statusFilter === 'discovered') {
-      filteredItems = mappedItems.filter(i => i.isDiscovered);
+      filteredItems = mappedItems.filter((i) => i.isDiscovered);
     } else if (statusFilter === 'undiscovered') {
-      filteredItems = mappedItems.filter(i => !i.isDiscovered);
+      filteredItems = mappedItems.filter((i) => !i.isDiscovered);
     }
 
-    const completionPercentage = totalCount > 0 ? Math.round((discoveredCount / totalCount) * 1000) / 10 : 0;
+    const completionPercentage =
+      totalCount > 0 ? Math.round((discoveredCount / totalCount) * 1000) / 10 : 0;
 
     return {
       category,
@@ -446,5 +462,70 @@ export class InventoryService {
       },
       items: filteredItems
     };
+  }
+
+  /**
+   * Returns active catalogue items with rarity details and base sale values.
+   */
+  static async getCatalog(category = null) {
+    let sql = `
+      SELECT ci.id, ci.category, ci.name, ci.rarity_id, ci.description, ci.image_url, ci.base_sale_value, ci.sort_order,
+             r.name as rarity_name, r.display_color as rarity_color
+      FROM catalog_items ci
+      JOIN rarities r ON ci.rarity_id = r.id
+      WHERE ci.active = 1
+    `;
+    const params = [];
+    if (category) {
+      sql += ' AND ci.category = ?';
+      params.push(category);
+    }
+    sql += ' ORDER BY ci.category ASC, ci.sort_order ASC';
+
+    return queryAll(sql, params);
+  }
+
+  /**
+   * Synchronizes or adds catalogue items safely without touching player inventory.
+   */
+  static async syncCatalog(items = []) {
+    if (!Array.isArray(items) || items.length === 0) {
+      throw new Error('items array is required');
+    }
+
+    const sqlSync = `
+      INSERT INTO catalog_items (id, category, name, rarity_id, description, image_url, active, sort_order, base_sale_value)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        category = excluded.category,
+        name = excluded.name,
+        rarity_id = excluded.rarity_id,
+        description = excluded.description,
+        image_url = excluded.image_url,
+        active = excluded.active,
+        sort_order = excluded.sort_order,
+        base_sale_value = excluded.base_sale_value;
+    `;
+
+    let updatedCount = 0;
+    for (const item of items) {
+      if (!item.id || !item.name || !item.category || !item.rarityId) {
+        continue;
+      }
+      await execute(sqlSync, [
+        item.id,
+        item.category,
+        item.name,
+        item.rarityId,
+        item.description || '',
+        item.imageUrl || `/assets/items/${item.id}.svg`,
+        item.active !== undefined ? (item.active ? 1 : 0) : 1,
+        item.sortOrder || 99,
+        item.baseSaleValue || 0
+      ]);
+      updatedCount++;
+    }
+
+    return { success: true, count: updatedCount };
   }
 }

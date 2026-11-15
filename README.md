@@ -1,8 +1,9 @@
 # Collection — Public Companion to Goti
 
-[![Tests](https://img.shields.io/badge/tests-23%2F23%20passing-brightgreen)](#automated-testing)
-[![Node](https://img.shields.io/badge/node-v22%2B-blue)](https://nodejs.org)
-[![Database](https://img.shields.io/badge/database-SQLite%20(WAL)-blueviolet)](#database-architecture)
+[![Tests](https://img.shields.io/badge/tests-36%2F36%20passing-brightgreen)](#automated-testing)
+[![Node](https://img.shields.io/badge/node-v20%2B%20%7C%20v22%2B-blue)](https://nodejs.org)
+[![Hosting](https://img.shields.io/badge/hosting-Vercel-black)](VERCEL_DEPLOYMENT.md)
+[![Database](https://img.shields.io/badge/database-Turso%20Cloud%20%2F%20libSQL-00E599)](#database-architecture)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 **Collection** is the public-facing read-only companion website for the **Goti** YouTube Streamer.bot gaming system. Viewers play chat mini-games (**Fishing**, **Mining**, and **Mystery Chests**) during livestreams, and their public collections are viewable by anyone with their link without requiring sign-up or login.
@@ -13,7 +14,7 @@
 
 - **Zero-Login Public Profiles:** Open any player link directly (`/u/{publicPlayerId}`). No login wall, no OAuth, no account creation.
 - **Privacy-First Architecture:** Private YouTube Channel IDs (`UC...`) and points balances are **never** exposed publicly. Public URLs use collision-resistant opaque slugs (`usr_...`).
-- **Instant Real-Time Synchronization:** Uses native Server-Sent Events (SSE) to update open public profile pages instantly when a viewer catches or sells an item in stream chat, with automatic reconnection and background revalidation.
+- **Instant Real-Time Synchronization:** Uses Server-Sent Events (SSE) with dual-layer cloud event reconciliation for seamless multi-instance Vercel Serverless Function updates.
 - **Strictly Read-Only Web Surface:** Zero buttons or forms to sell, trade, or mutate items on the website. Item selling is performed exclusively through chat commands handled by Streamer.bot.
 - **Two-Phase Idempotent Selling Flow:** Safe `reserve` & `commit`/`cancel` transaction protocol prevents double-selling and protects against item loss during bot crashes.
 - **Dynamic Data-Driven Denominators:** Total item counts and category progress are calculated live from the database, never hard-coded.
@@ -21,8 +22,8 @@
 - **Dynamic Badge Revocation:** If a player sells their final copy of an item and drops below an achievement threshold, the badge is automatically revoked.
 - **Signature & Nonce Verification:** Production-grade HMAC-SHA256 verification with replay prevention and clock drift checking for all bot calls.
 - **Dark Gaming Aesthetic:** Deep Black (`#09090C`), Crimson Accent (`#D83C53`), elevated card surfaces (`#19191F`), responsive across mobile and desktop.
-- **Watermark:** Proudly displaying `made with ❤️ by acrone`.
-- **100% Native Architecture:** Built using Node.js built-ins (`node:sqlite`, `node:http`, `node:crypto`) with zero brittle native binary compilation dependencies.
+- **Watermark:** Proudly displaying `made with ❤️ by acrone` on the homepage footer.
+- **Vercel & Turso Cloud Ready:** Fully native libSQL / Turso Cloud deployment support with zero-downtime database migrations.
 
 ---
 
@@ -36,15 +37,15 @@
   STREAMER.BOT / GOTI BOT CLIENT
   - Evaluates chat game RNG & currency ledger
   - Signs requests with HMAC-SHA256 (Bot Secret)
-  - Replies in YouTube chat: "@{user} Your collection: https://acrone.gg/u/{publicPlayerId}"
+  - Replies in YouTube chat: "@{user} Your collection: https://your-acrone-project.vercel.app/u/{publicPlayerId}"
              │
-             ▼ (Protected HTTPS POST)
-  COLLECTION SERVER (Node.js)
+             ▼ (Protected HTTPS POST with HMAC headers)
+  COLLECTION SERVER (Vercel Serverless / Node.js)
   ├─ [Bot Auth Middleware] HMAC-SHA256 & Nonce Replay Check
   ├─ [Inventory Mutation Engine] Idempotent Find & 2-Phase Sale
   ├─ [Authoritative Achievement Engine] Dynamic Award & Revocation
-  ├─ [Durable Storage] SQLite in WAL Mode with Foreign Keys
-  └─ [Real-time Hub] Server-Sent Events (SSE) Broadcaster
+  ├─ [Durable Storage] Turso Cloud (libSQL) / Local SQLite WAL
+  └─ [Real-time Hub] Server-Sent Events (SSE) & Catch-Up Stream
              │
              ▼ (Public Read-Only HTTPS & SSE)
   PUBLIC WEB CLIENT (Desktop & Mobile)
@@ -54,8 +55,9 @@
 ```
 
 Detailed documentation:
+- 🚀 [Vercel & Turso Deployment Guide](VERCEL_DEPLOYMENT.md)
 - 📖 [Architecture Specification](docs/ARCHITECTURE.md)
-- 🔌 [API Contract & Schema Reference](docs/API_CONTRACT.md)
+- 🔌 [Complete V2 API Contract Reference](docs/API_CONTRACT.md)
 - 🤖 [Streamer.bot Integration Guide (with C# Code)](docs/STREAMERBOT_INTEGRATION.md)
 - 📋 [Outstanding Owner Decisions Checklist](docs/OWNER_DECISIONS.md)
 

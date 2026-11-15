@@ -3,6 +3,7 @@ import { Router } from '../server/router.js';
 import { registerBotRoutes } from '../server/routes/botRoutes.js';
 import { registerPublicRoutes } from '../server/routes/publicRoutes.js';
 import { config } from '../server/config.js';
+import { ensureDbReady } from '../server/db/index.js';
 
 export function createTestRouter() {
   const router = new Router();
@@ -28,6 +29,7 @@ export function generateHmacHeaders(body, secret = config.botApiSecret, customTi
 }
 
 export async function dispatch(router, { method = 'GET', url = '/', headers = {}, body = null }) {
+  await ensureDbReady();
   return new Promise((resolve) => {
     const rawBody = body ? (typeof body === 'string' ? body : JSON.stringify(body)) : '';
     const parsedBody = body ? (typeof body === 'string' ? JSON.parse(body) : body) : {};

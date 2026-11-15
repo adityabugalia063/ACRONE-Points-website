@@ -1,46 +1,93 @@
-# Streamer.bot / Acrone Points Desktop Integration Guide
+# Streamer.bot / Acrone Points V2 Integration Guide
 
-This guide is for the developer of the **Acrone Points** desktop app / Streamer.bot integration. It provides step-by-step instructions and production-ready C# code snippets for connecting YouTube chat commands directly to the Acrone Collection website.
+This guide is for the developer of the **Acrone Points V2** desktop application / Streamer.bot integration. It provides production-ready C# code snippets with **HMAC-SHA256 request signing** for connecting YouTube stream chat mini-games to the Acrone Collection website.
 
 ---
 
 ## 1. Architecture Overview
 
 ```
- [YouTube Chat] ──▶ [Streamer.bot Client] ──▶ [Acrone Collection Server]
-                     - Handles Game RNG        - Authoritative inventory
-                     - Points Ledger           - Real-time SSE updates
-                     - Chat Replies            - Public Profile (/u/{id})
+[YouTube Chat] ──▶ [Streamer.bot (C#)] ──▶ [Acrone Collection (Vercel)]
+                     - Mini-game RNG         - Authoritative inventory
+                     - Points ledger         - Real-time SSE updates
+                     - Chat replies          - Public Profile (/u/{id})
 ```
 
-- **Authentication:** All requests to `/api/v1/bot/*` must carry the secret configured in `.env` as `BOT_API_SECRET`.
-  - Header: `Authorization: Bearer <BOT_API_SECRET>` (or HMAC headers `X-Bot-Timestamp`, `X-Bot-Nonce`, `X-Bot-Signature`).
-- **Identity Key:** Pass the viewer's YouTube Channel ID (`UC...`). The backend automatically resolves this to an opaque public slug (`usr_...`).
+- **Authentication:** In production, every request must carry HMAC-SHA256 headers: `X-Bot-Timestamp`, `X-Bot-Nonce`, and `X-Bot-Signature`.
+- **Identity Key:** The viewer's permanent YouTube Channel ID (`UC...`). The website maps this to a stable public slug (`usr_...`).
+- **Selling Flow:** Two-phase transactions: Reserve -> Credit Points locally -> Commit (or Cancel if crediting fails).
 
 ---
 
-## 2. Command Implementations
+## 2. Shared C# HMAC Signing Helper
+
+Include this helper method in your Streamer.bot C# script or global methods:
+
+```csharp
+using System;
+using System.Net.Http;
+using System.Security.Cryptography;
+using System.Text;
+
+public static class AcroneApiHelper
+{
+    public static HttpRequestMessage CreateSignedRequest(
+        HttpMethod method,
+        string url,
+        string jsonBody,
+        string botSecret)
+    {
+        var request = new HttpRequestMessage(method, url);
+        long timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        string nonce = Guid.NewGuid().ToString("N");
+        string rawBody = jsonBody ?? "";
+
+        // Canonical string: timestamp.nonce.rawBody
+        string canonical = $"{timestamp}.{nonce}.{rawBody}";
+
+        // Compute HMAC-SHA256
+        string signature;
+        using (var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(botSecret)))
+        {
+            byte[] hash = hmac.ComputeHash(Encoding.UTF8.GetBytes(canonical));
+            signature = BitConverter.ToString(hash).Replace("-", "").ToLowerInvariant();
+        }
+
+        request.Headers.Add("X-Bot-Timestamp", timestamp.ToString());
+        request.Headers.Add("X-Bot-Nonce", nonce);
+        request.Headers.Add("X-Bot-Signature", signature);
+
+        if (!string.IsNullOrEmpty(jsonBody))
+        {
+            request.Content = new StringContent(jsonBody, Encoding.UTF8, "application/json");
+        }
+
+        return request;
+    }
+}
+```
+
+---
+
+## 3. Command Implementations
 
 ### Command 1: `!collection`
 Replies in YouTube chat with the viewer's personal public collection link.
 
-#### Streamer.bot C# Action (`Execute C# Code`):
 ```csharp
 using System;
 using System.Net.Http;
-using System.Text;
 using Newtonsoft.Json;
 
 public class CPHInline
 {
     private static readonly HttpClient client = new HttpClient();
-    private const string API_ENDPOINT = "https://YOUR-ACRONE-DOMAIN.com/api/v1/bot/players/upsert";
-    private const string BOT_API_SECRET = "YOUR_CONFIGURED_BOT_SECRET";
+    private const string API_URL = "https://your-acrone-project.vercel.app/api/v1/bot/players/upsert";
+    private const string BOT_SECRET = "your_production_bot_secret_here";
 
     public bool Execute()
     {
-        // 1. Extract YouTube viewer variables from Streamer.bot context
-        string youtubeChannelId = CPH.GetYouTubeUserChannelId(); // or CPH.GetTwitchOrYouTubeUser();
+        string channelId = CPH.GetYouTubeUserChannelId();
         string displayName = CPH.GetYouTubeUserDisplayName();
         string avatarUrl = CPH.GetYouTubeUserAvatar();
 
@@ -48,36 +95,32 @@ public class CPHInline
         {
             var payload = new
             {
-                youtubeChannelId = youtubeChannelId,
+                youtubeChannelId = channelId,
                 displayName = displayName,
                 avatarUrl = avatarUrl
             };
+            string json = JsonConvert.SerializeObject(payload);
 
-            var request = new HttpRequestMessage(HttpMethod.Post, API_ENDPOINT);
-            request.Headers.Add("Authorization", "Bearer " + BOT_API_SECRET);
-            request.Content = new StringContent(JsonConvert.SerializeObject(payload), Encoding.UTF8, "application/json");
-
+            var request = AcroneApiHelper.CreateSignedRequest(HttpMethod.Post, API_URL, json, BOT_SECRET);
             var response = client.SendAsync(request).Result;
-            string jsonResponse = response.Content.ReadAsStringAsync().Result;
+            string body = response.Content.ReadAsStringAsync().Result;
 
             if (response.IsSuccessStatusCode)
             {
-                dynamic data = JsonConvert.DeserializeObject(jsonResponse);
-                string collectionUrl = data.player.collectionUrl;
-
-                // Reply to the viewer in YouTube chat
+                dynamic result = JsonConvert.DeserializeObject(body);
+                string collectionUrl = result.player.collectionUrl;
                 CPH.SendYouTubeMessage($"@{displayName} Your collection: {collectionUrl}");
                 return true;
             }
             else
             {
-                CPH.LogWarn($"[Acrone] Upsert failed with status: {response.StatusCode}");
+                CPH.LogWarn("[Acrone] Upsert failed: " + response.StatusCode);
                 return false;
             }
         }
         catch (Exception ex)
         {
-            CPH.LogError("[Acrone] Error in !collection action: " + ex.Message);
+            CPH.LogError("[Acrone] Error in !collection: " + ex.Message);
             return false;
         }
     }
@@ -86,65 +129,57 @@ public class CPHInline
 
 ---
 
-### Command 2: `!fish`, `!mine`, `!chest` (Item Finds)
-When a mini-game succeeds and awards an item, record the event on the website.
+### Command 2: `!fish`, `!mine`, `!chest` (Collection Discoveries)
 
-#### Streamer.bot C# Action:
+When a viewer wins an item in a mini-game, submit the idempotent event to the website:
+
 ```csharp
 using System;
 using System.Net.Http;
-using System.Text;
 using Newtonsoft.Json;
 
 public class CPHInline
 {
     private static readonly HttpClient client = new HttpClient();
-    private const string API_ENDPOINT = "https://YOUR-ACRONE-DOMAIN.com/api/v1/bot/collection-events";
-    private const string BOT_API_SECRET = "YOUR_CONFIGURED_BOT_SECRET";
+    private const string API_URL = "https://your-acrone-project.vercel.app/api/v1/bot/collection-events";
+    private const string BOT_SECRET = "your_production_bot_secret_here";
 
-    public bool Execute()
+    public bool RecordItemFind(string channelId, string displayName, string itemId, string category, int quantity = 1)
     {
-        string youtubeChannelId = CPH.GetYouTubeUserChannelId();
-        string displayName = CPH.GetYouTubeUserDisplayName();
-        
-        // E.g. roll result determined by your local bot game RNG:
-        string itemId = "fish_golden_koi"; 
-        string source = "fishing"; // 'fishing', 'mining', or 'chest'
-        string eventId = Guid.NewGuid().ToString(); // Idempotency key
+        string eventId = "evt_" + Guid.NewGuid().ToString("N");
+
+        var payload = new
+        {
+            eventId = eventId,
+            youtubeChannelId = channelId,
+            itemId = itemId,
+            quantity = quantity,
+            source = category, // "fishing", "mining", or "chest"
+            occurredAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+        };
+        string json = JsonConvert.SerializeObject(payload);
 
         try
         {
-            var payload = new
-            {
-                eventId = eventId,
-                youtubeChannelId = youtubeChannelId,
-                itemId = itemId,
-                quantity = 1,
-                source = source,
-                occurredAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
-            };
-
-            var request = new HttpRequestMessage(HttpMethod.Post, API_ENDPOINT);
-            request.Headers.Add("Authorization", "Bearer " + BOT_API_SECRET);
-            request.Content = new StringContent(JsonConvert.SerializeObject(payload), Encoding.UTF8, "application/json");
-
+            var request = AcroneApiHelper.CreateSignedRequest(HttpMethod.Post, API_URL, json, BOT_SECRET);
             var response = client.SendAsync(request).Result;
-            string json = response.Content.ReadAsStringAsync().Result;
+            string body = response.Content.ReadAsStringAsync().Result;
 
             if (response.IsSuccessStatusCode)
             {
-                dynamic result = JsonConvert.DeserializeObject(json);
-                string itemName = result.item.name;
-                int newQty = result.item.newQuantity;
+                dynamic data = JsonConvert.DeserializeObject(body);
+                string itemName = data.item.name;
+                string rarity = data.item.rarity;
+                int newQty = data.item.newQuantity;
 
-                CPH.SendYouTubeMessage($"🎣 @{displayName} caught a [{result.item.rarity}] {itemName}! (Owned: ×{newQty})");
+                CPH.SendYouTubeMessage($"🎣 @{displayName} caught a [{rarity}] {itemName}! (Owned: ×{newQty})");
                 return true;
             }
             return false;
         }
         catch (Exception ex)
         {
-            CPH.LogError("[Acrone] Event submission failed: " + ex.Message);
+            CPH.LogError("[Acrone] Collection event error: " + ex.Message);
             return false;
         }
     }
@@ -153,53 +188,94 @@ public class CPHInline
 
 ---
 
-### Command 3: `!sell <item> <quantity>` (Two-Phase Atomic Selling)
-Selling items converts collectibles into Acrone Points. The two-phase flow prevents double-selling and prevents items disappearing if your local points ledger crashes:
+### Command 3: `!sell` (Two-Phase Atomic Selling)
+
+Safely reserve items on the website before crediting Acrone Points. If crediting fails, the reservation is cancelled so the player never loses items without getting points.
 
 ```csharp
-public bool ExecuteSell(string youtubeChannelId, string itemId, int quantity)
-{
-    string reservationId = "res_" + Guid.NewGuid().ToString();
+using System;
+using System.Net.Http;
+using Newtonsoft.Json;
 
-    // PHASE 1: Reserve inventory on Acrone Collection server
-    var reservePayload = new {
-        reservationId = reservationId,
-        youtubeChannelId = youtubeChannelId,
-        itemId = itemId,
-        quantity = quantity
-    };
-    
-    var reserveRes = PostToBotApi("/api/v1/bot/sales/reserve", reservePayload);
-    if (!reserveRes.success) {
-        CPH.SendYouTubeMessage("❌ You do not have enough of that item to sell!");
-        return false;
+public class CPHInline
+{
+    private static readonly HttpClient client = new HttpClient();
+    private const string BASE_URL = "https://your-acrone-project.vercel.app";
+    private const string BOT_SECRET = "your_production_bot_secret_here";
+
+    public bool SellItem(string channelId, string displayName, string itemId, int quantity)
+    {
+        string reservationId = "res_" + Guid.NewGuid().ToString("N");
+
+        // Step 1: Reserve item
+        var reservePayload = new
+        {
+            reservationId = reservationId,
+            youtubeChannelId = channelId,
+            itemId = itemId,
+            quantity = quantity
+        };
+        string reserveJson = JsonConvert.SerializeObject(reservePayload);
+
+        var reserveReq = AcroneApiHelper.CreateSignedRequest(
+            HttpMethod.Post,
+            $"{BASE_URL}/api/v1/bot/sales/reserve",
+            reserveJson,
+            BOT_SECRET
+        );
+        var reserveRes = client.SendAsync(reserveReq).Result;
+        string reserveBody = reserveRes.Content.ReadAsStringAsync().Result;
+
+        if (!reserveRes.IsSuccessStatusCode)
+        {
+            CPH.SendYouTubeMessage($"@{displayName} You don't have enough copies of this item to sell.");
+            return false;
+        }
+
+        dynamic reserveData = JsonConvert.DeserializeObject(reserveBody);
+        int pointsToCredit = (int)reserveData.suggestedSaleValueTotal;
+
+        // Step 2: Credit Acrone Points locally in Streamer.bot
+        bool pointsCredited = CreditPlayerPoints(channelId, pointsToCredit);
+
+        if (pointsCredited)
+        {
+            // Step 3A: Commit the sale
+            var commitPayload = new { reservationId = reservationId };
+            string commitJson = JsonConvert.SerializeObject(commitPayload);
+            var commitReq = AcroneApiHelper.CreateSignedRequest(
+                HttpMethod.Post,
+                $"{BASE_URL}/api/v1/bot/sales/commit",
+                commitJson,
+                BOT_SECRET
+            );
+            client.SendAsync(commitReq).Wait();
+
+            CPH.SendYouTubeMessage($"💰 @{displayName} sold ×{quantity} item(s) for +{pointsToCredit} Goti!");
+            return true;
+        }
+        else
+        {
+            // Step 3B: Cancel reservation to restore items
+            var cancelPayload = new { reservationId = reservationId, reason = "Local credit failed" };
+            string cancelJson = JsonConvert.SerializeObject(cancelPayload);
+            var cancelReq = AcroneApiHelper.CreateSignedRequest(
+                HttpMethod.Post,
+                $"{BASE_URL}/api/v1/bot/sales/cancel",
+                cancelJson,
+                BOT_SECRET
+            );
+            client.SendAsync(cancelReq).Wait();
+
+            CPH.SendYouTubeMessage($"@{displayName} Points transaction failed. Your inventory was preserved.");
+            return false;
+        }
     }
 
-    int pointsToCredit = reserveRes.suggestedSaleValueTotal;
-
-    // PHASE 2: Credit Acrone Points in your local Streamer.bot database
-    bool pointsCredited = LocalPointsLedger.AddPoints(youtubeChannelId, pointsToCredit);
-
-    if (pointsCredited) {
-        // Phase 2A: Commit the sale
-        PostToBotApi("/api/v1/bot/sales/commit", new { reservationId });
-        CPH.SendYouTubeMessage($"💰 Sold {quantity}× for {pointsToCredit} Acrone Points!");
+    private bool CreditPlayerPoints(string channelId, int points)
+    {
+        // Add points using your Streamer.bot points action or local DB
         return true;
-    } else {
-        // Phase 2B: Cancel reservation if points addition failed
-        PostToBotApi("/api/v1/bot/sales/cancel", new { reservationId, reason = "Local points ledger failure" });
-        CPH.SendYouTubeMessage("❌ An error occurred crediting points. Your items have been restored.");
-        return false;
     }
 }
 ```
-
----
-
-## 3. Offline Queuing & Idempotency Rules
-
-1. **Deterministic Event IDs:** Every find or drop must generate a UUID `eventId` before attempting the network request.
-2. **Offline Retry:** If the broadcaster's internet connection temporarily drops:
-   - Save the unacknowledged event to a local SQLite table or file queue: `(eventId, youtubeChannelId, itemId, quantity, source, timestamp)`.
-   - When the connection recovers, replay the events in sequence.
-   - The backend checks `eventId` and ignores duplicates, guaranteeing **zero duplicate items**.

@@ -17,6 +17,7 @@ data/*.db-shm
 
 # Build output & caches
 dist/
+.vercel/
 .cache/
 .DS_Store
 Thumbs.db

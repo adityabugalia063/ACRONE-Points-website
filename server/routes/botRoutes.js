@@ -2,20 +2,62 @@ import { PlayerService } from '../services/playerService.js';
 import { InventoryService } from '../services/inventoryService.js';
 import { AchievementService } from '../services/achievementService.js';
 import { verifyBotAuth } from '../middleware/auth.js';
+import { botRateLimiter } from '../middleware/rateLimiter.js';
+import { queryOne, queryAll } from '../db/index.js';
 
 export function registerBotRoutes(router) {
-  // 1. Player Upsert
-  router.post('/api/v1/bot/players/upsert', verifyBotAuth, (req, res) => {
+  // 1. Health Check (Open to hosting probes & authenticated bot checks)
+  router.get('/api/v1/bot/health', botRateLimiter, async (req, res) => {
+    try {
+      // Test database connectivity
+      const dbCheck = await queryOne('SELECT 1 as alive;');
+      const isDbAlive = Boolean(dbCheck?.alive);
+
+      // Fetch active catalogue counts
+      const counts = await queryAll(
+        `SELECT category, COUNT(*) as count 
+         FROM catalog_items 
+         WHERE active = 1 
+         GROUP BY category;`
+      );
+
+      const catalogue = { fish: 0, mining: 0, chest: 0, total: 0 };
+      for (const row of counts) {
+        if (catalogue[row.category] !== undefined) {
+          catalogue[row.category] = Number(row.count);
+        }
+        catalogue.total += Number(row.count);
+      }
+
+      return res.status(200).json({
+        status: isDbAlive ? 'healthy' : 'degraded',
+        database: isDbAlive ? 'connected' : 'disconnected',
+        apiVersion: '2.0.0',
+        timestamp: Date.now(),
+        catalogue
+      });
+    } catch (err) {
+      return res.status(500).json({
+        status: 'unhealthy',
+        database: 'error',
+        message: err.message,
+        timestamp: Date.now()
+      });
+    }
+  });
+
+  // 2. Player Upsert (Stable YouTube Channel ID mapping)
+  router.post('/api/v1/bot/players/upsert', botRateLimiter, verifyBotAuth, async (req, res) => {
     try {
       const { youtubeChannelId, displayName, avatarUrl } = req.body || {};
-      if (!youtubeChannelId) {
+      if (!youtubeChannelId || typeof youtubeChannelId !== 'string') {
         return res.status(400).json({
           error: 'BAD_REQUEST',
           message: 'youtubeChannelId is required'
         });
       }
 
-      const result = PlayerService.upsertPlayer({
+      const result = await PlayerService.upsertPlayer({
         youtubeChannelId,
         displayName,
         avatarUrl
@@ -33,8 +75,82 @@ export function registerBotRoutes(router) {
     }
   });
 
-  // 2. Collection Events (Find / Drop) - Idempotent
-  router.post('/api/v1/bot/collection-events', verifyBotAuth, (req, res) => {
+  // 3. Catalogue Ingestion / Read
+  router.get('/api/v1/bot/catalog', botRateLimiter, verifyBotAuth, async (req, res) => {
+    try {
+      const category = req.query?.category || null;
+      const items = await InventoryService.getCatalog(category);
+      return res.status(200).json({
+        success: true,
+        count: items.length,
+        items
+      });
+    } catch (err) {
+      return res.status(500).json({
+        error: 'FETCH_CATALOG_FAILED',
+        message: err.message
+      });
+    }
+  });
+
+  // 4. Catalogue Synchronization (Non-destructive)
+  router.post('/api/v1/bot/catalog/sync', botRateLimiter, verifyBotAuth, async (req, res) => {
+    try {
+      const { items } = req.body || {};
+      if (!items || !Array.isArray(items)) {
+        return res.status(400).json({
+          error: 'BAD_REQUEST',
+          message: 'items array is required'
+        });
+      }
+
+      const result = await InventoryService.syncCatalog(items);
+      return res.status(200).json(result);
+    } catch (err) {
+      return res.status(500).json({
+        error: 'CATALOG_SYNC_FAILED',
+        message: err.message
+      });
+    }
+  });
+
+  // 5. Player Inventory Snapshot (Bot recovery and initial sync)
+  router.get('/api/v1/bot/players/snapshot', botRateLimiter, verifyBotAuth, async (req, res) => {
+    try {
+      const { youtubeChannelId, publicPlayerId } = req.query || {};
+      if (!youtubeChannelId && !publicPlayerId) {
+        return res.status(400).json({
+          error: 'BAD_REQUEST',
+          message: 'Either youtubeChannelId or publicPlayerId query parameter is required'
+        });
+      }
+
+      const snapshot = await PlayerService.getPlayerSnapshot({
+        youtubeChannelId,
+        publicPlayerId
+      });
+
+      if (!snapshot) {
+        return res.status(404).json({
+          error: 'PLAYER_NOT_FOUND',
+          message: 'Player could not be found'
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        ...snapshot
+      });
+    } catch (err) {
+      return res.status(500).json({
+        error: 'SNAPSHOT_FAILED',
+        message: err.message
+      });
+    }
+  });
+
+  // 6. Collection Events (Find / Drop) - Idempotent
+  router.post('/api/v1/bot/collection-events', botRateLimiter, verifyBotAuth, async (req, res) => {
     try {
       const { eventId, youtubeChannelId, itemId, quantity, source, referenceId, occurredAt } = req.body || {};
 
@@ -45,7 +161,7 @@ export function registerBotRoutes(router) {
         });
       }
 
-      const result = InventoryService.recordCollectionEvent({
+      const result = await InventoryService.recordCollectionEvent({
         eventId,
         youtubeChannelId,
         itemId,
@@ -65,8 +181,8 @@ export function registerBotRoutes(router) {
     }
   });
 
-  // 3. Two-Phase Sale: Phase 1 (Reserve)
-  router.post('/api/v1/bot/sales/reserve', verifyBotAuth, (req, res) => {
+  // 7. Two-Phase Sale: Phase 1 (Reserve)
+  router.post('/api/v1/bot/sales/reserve', botRateLimiter, verifyBotAuth, async (req, res) => {
     try {
       const { reservationId, youtubeChannelId, itemId, quantity } = req.body || {};
 
@@ -77,7 +193,7 @@ export function registerBotRoutes(router) {
         });
       }
 
-      const result = InventoryService.reserveSale({
+      const result = await InventoryService.reserveSale({
         reservationId,
         youtubeChannelId,
         itemId,
@@ -96,8 +212,8 @@ export function registerBotRoutes(router) {
     }
   });
 
-  // 4. Two-Phase Sale: Phase 2A (Commit)
-  router.post('/api/v1/bot/sales/commit', verifyBotAuth, (req, res) => {
+  // 8. Two-Phase Sale: Phase 2A (Commit)
+  router.post('/api/v1/bot/sales/commit', botRateLimiter, verifyBotAuth, async (req, res) => {
     try {
       const { reservationId } = req.body || {};
 
@@ -108,7 +224,7 @@ export function registerBotRoutes(router) {
         });
       }
 
-      const result = InventoryService.commitSale({ reservationId });
+      const result = await InventoryService.commitSale({ reservationId });
       return res.status(200).json(result);
     } catch (err) {
       const status = err.code === 'RESERVATION_EXPIRED' ? 410 : 500;
@@ -119,8 +235,8 @@ export function registerBotRoutes(router) {
     }
   });
 
-  // 5. Two-Phase Sale: Phase 2B (Cancel)
-  router.post('/api/v1/bot/sales/cancel', verifyBotAuth, (req, res) => {
+  // 9. Two-Phase Sale: Phase 2B (Cancel)
+  router.post('/api/v1/bot/sales/cancel', botRateLimiter, verifyBotAuth, async (req, res) => {
     try {
       const { reservationId, reason } = req.body || {};
 
@@ -131,7 +247,7 @@ export function registerBotRoutes(router) {
         });
       }
 
-      const result = InventoryService.cancelSale({ reservationId, reason });
+      const result = await InventoryService.cancelSale({ reservationId, reason });
       return res.status(200).json(result);
     } catch (err) {
       return res.status(500).json({
@@ -141,8 +257,8 @@ export function registerBotRoutes(router) {
     }
   });
 
-  // 6. Direct Achievement Sync
-  router.post('/api/v1/bot/achievements/sync', verifyBotAuth, (req, res) => {
+  // 10. Direct Achievement Sync
+  router.post('/api/v1/bot/achievements/sync', botRateLimiter, verifyBotAuth, async (req, res) => {
     try {
       const { youtubeChannelId, achievementId, action } = req.body || {};
 
@@ -153,7 +269,7 @@ export function registerBotRoutes(router) {
         });
       }
 
-      const result = AchievementService.syncDirect(youtubeChannelId, achievementId, action || 'unlock');
+      const result = await AchievementService.syncDirect(youtubeChannelId, achievementId, action || 'unlock');
       return res.status(200).json({
         success: true,
         ...result

@@ -11,6 +11,7 @@
     "build": "vite build",
     "start": "NODE_ENV=production node server/index.js",
     "seed": "node server/db/seed.js",
+    "migrate:turso": "node scripts/migrateToTurso.js",
     "test": "node --test --test-concurrency=1 test/**/*.test.js"
   },
   "keywords": [
@@ -22,5 +23,8 @@
     "gamification"
   ],
   "author": "Acrone Points Team",
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "@libsql/client": "^0.18.0"
+  }
 }

@@ -2,8 +2,8 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { config } from './config.js';
-import { getDb, closeDb } from './db/index.js';
+import { config, validateProductionConfig } from './config.js';
+import { ensureDbReady, closeDb } from './db/index.js';
 import { Router } from './router.js';
 import { registerBotRoutes } from './routes/botRoutes.js';
 import { registerPublicRoutes } from './routes/publicRoutes.js';
@@ -11,22 +11,25 @@ import { registerPublicRoutes } from './routes/publicRoutes.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Initialize DB schema on startup
-getDb();
+// Validate environment on startup
+validateProductionConfig();
 
-const router = new Router();
+export const router = new Router();
 
 // 1. Global Middleware: CORS & Security Headers
 router.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Bot-Timestamp, X-Bot-Nonce, X-Bot-Signature');
-  
+  res.setHeader(
+    'Access-Control-Allow-Headers',
+    'Content-Type, Authorization, X-Bot-Timestamp, X-Bot-Nonce, X-Bot-Signature'
+  );
+
   // Security Headers
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'SAMEORIGIN');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
-  
+
   // SEO Indexing toggle
   if (config.allowIndexing) {
     res.setHeader('X-Robots-Tag', 'index, follow');
@@ -42,14 +45,22 @@ router.use((req, res, next) => {
   next();
 });
 
-// 2. Global Middleware: Body Parser for POST requests
+// 2. Global Middleware: Body Parser for POST/PUT requests
 router.use((req, res, next) => {
   if (req.method !== 'POST' && req.method !== 'PUT' && req.method !== 'PATCH') {
     return next();
   }
 
+  // If already parsed by host environment
+  if (req.body && typeof req.body === 'object' && Object.keys(req.body).length > 0) {
+    if (!req.rawBody) {
+      req.rawBody = JSON.stringify(req.body);
+    }
+    return next();
+  }
+
   let bodyData = '';
-  req.on('data', chunk => {
+  req.on('data', (chunk) => {
     bodyData += chunk;
     // 1MB request size limit protection
     if (bodyData.length > 1e6) {
@@ -74,7 +85,7 @@ router.use((req, res, next) => {
   });
 });
 
-// Register routes
+// Register all API routes
 registerBotRoutes(router);
 registerPublicRoutes(router);
 
@@ -92,72 +103,79 @@ const MIME_TYPES = {
   '.woff2': 'font/woff2'
 };
 
-export function createServer() {
-  const server = http.createServer(async (req, res) => {
-    try {
-      // 1. Attempt API Router match first
-      const handled = await router.handle(req, res);
-      if (res.writableEnded) return;
+/**
+ * Universal request handler function.
+ * Used both in standalone Node.js server and Vercel Serverless Function entrypoint.
+ */
+export async function app(req, res) {
+  try {
+    // Ensure DB is initialized
+    await ensureDbReady();
 
-      const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-      const pathname = parsedUrl.pathname;
+    // 1. Attempt API Router match first
+    await router.handle(req, res);
+    if (res.writableEnded) return;
 
-      // 2. Static Asset Handling
-      const publicDir = config.publicStaticDir;
-      const filePath = path.join(publicDir, pathname);
+    const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    const pathname = parsedUrl.pathname;
 
-      // Prevent directory traversal
-      if (filePath.startsWith(publicDir) && fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
-        const ext = path.extname(filePath).toLowerCase();
-        const contentType = MIME_TYPES[ext] || 'application/octet-stream';
-        res.writeHead(200, {
-          'Content-Type': contentType,
-          'Cache-Control': ext === '.svg' ? 'public, max-age=86400' : 'no-cache, no-store, must-revalidate'
-        });
-        fs.createReadStream(filePath).pipe(res);
+    // 2. Static Asset Handling (Local development and standalone server)
+    const publicDir = config.publicStaticDir;
+    const filePath = path.join(publicDir, pathname);
+
+    // Prevent directory traversal
+    if (filePath.startsWith(publicDir) && fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
+      const ext = path.extname(filePath).toLowerCase();
+      const contentType = MIME_TYPES[ext] || 'application/octet-stream';
+      res.writeHead(200, {
+        'Content-Type': contentType,
+        'Cache-Control': ext === '.svg' ? 'public, max-age=86400' : 'no-cache, no-store, must-revalidate'
+      });
+      fs.createReadStream(filePath).pipe(res);
+      return;
+    }
+
+    // 3. Fallback for public web client (SPA routing for /u/* and /)
+    if (pathname === '/' || pathname.startsWith('/u/')) {
+      const indexPath = path.join(publicDir, 'index.html');
+      if (fs.existsSync(indexPath)) {
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        fs.createReadStream(indexPath).pipe(res);
         return;
       }
-
-      // 3. Fallback for public web client (SPA routing for /u/* and /)
-      if (pathname === '/' || pathname.startsWith('/u/')) {
-        const indexPath = path.join(publicDir, 'index.html');
-        if (fs.existsSync(indexPath)) {
-          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-          fs.createReadStream(indexPath).pipe(res);
-          return;
-        }
-      }
-
-      // 4. 404 Handler
-      if (pathname.startsWith('/api/')) {
-        res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(JSON.stringify({ error: 'NOT_FOUND', message: `Endpoint ${pathname} does not exist` }));
-      } else {
-        res.writeHead(404, { 'Content-Type': 'text/html; charset=utf-8' });
-        res.end(`<!DOCTYPE html><html><body style="background:#09090C;color:#F4F4F6;font-family:sans-serif;text-align:center;padding:50px;">
-          <h1 style="color:#D83C53;">404 — Page Not Found</h1>
-          <p>The requested page or asset does not exist.</p>
-          <a href="/" style="color:#D83C53;text-decoration:none;">Return to Collection</a>
-        </body></html>`);
-      }
-    } catch (err) {
-      console.error('Unhandled Server Error:', err);
-      if (!res.writableEnded) {
-        res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(JSON.stringify({ error: 'INTERNAL_SERVER_ERROR', message: err.message }));
-      }
     }
-  });
 
-  return server;
+    // 4. 404 Handler
+    if (pathname.startsWith('/api/')) {
+      res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ error: 'NOT_FOUND', message: `Endpoint ${pathname} does not exist` }));
+    } else {
+      res.writeHead(404, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(`<!DOCTYPE html><html><body style="background:#09090C;color:#F4F4F6;font-family:sans-serif;text-align:center;padding:50px;">
+        <h1 style="color:#D83C53;">404 — Page Not Found</h1>
+        <p>The requested page or asset does not exist.</p>
+        <a href="/" style="color:#D83C53;text-decoration:none;">Return to Collection</a>
+      </body></html>`);
+    }
+  } catch (err) {
+    console.error('Unhandled Server Error:', err);
+    if (!res.writableEnded) {
+      res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ error: 'INTERNAL_SERVER_ERROR', message: err.message }));
+    }
+  }
+}
+
+export function createServer() {
+  return http.createServer(app);
 }
 
 // Start server if executed directly
 if (process.argv[1] && process.argv[1].endsWith('index.js')) {
   const server = createServer();
-  server.listen(config.port, () => {
+  server.listen(config.port, '0.0.0.0', () => {
     console.log(`🚀 Collection Server running at http://localhost:${config.port}`);
-    console.log(`📦 Database loaded at: ${config.dbPath}`);
+    console.log(`📦 Database loaded: ${config.tursoDatabaseUrl ? 'Turso Cloud' : config.dbPath}`);
     console.log(`⚡ Real-time SSE enabled`);
   });
 
@@ -173,3 +191,5 @@ if (process.argv[1] && process.argv[1].endsWith('index.js')) {
   process.on('SIGINT', cleanup);
   process.on('SIGTERM', cleanup);
 }
+
+export default app;

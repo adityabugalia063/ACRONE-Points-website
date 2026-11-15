@@ -1,4 +1,4 @@
-import crypto from 'crypto';
+import crypto from 'node:crypto';
 import { config } from '../config.js';
 
 // Nonce cache for replay attack prevention within timestamp window
@@ -15,9 +15,16 @@ setInterval(() => {
 }, 300000).unref();
 
 export function verifyBotAuth(req, res, next) {
-  // Option 1: Bearer Token (Development / Simplified integration)
+  // Option 1: Bearer Token (strictly allowed ONLY in development and testing)
   const authHeader = req.headers['authorization'];
   if (authHeader && authHeader.startsWith('Bearer ')) {
+    if (config.isProduction) {
+      return res.status(403).json({
+        error: 'BEARER_DISABLED_IN_PRODUCTION',
+        message: 'Bearer token authentication is disabled in production. HMAC-SHA256 headers are required.'
+      });
+    }
+
     const token = authHeader.slice(7).trim();
     if (safeCompare(token, config.botApiSecret)) {
       req.authMethod = 'bearer';
@@ -33,7 +40,7 @@ export function verifyBotAuth(req, res, next) {
   if (!timestampHeader || !nonce || !signature) {
     return res.status(401).json({
       error: 'UNAUTHORIZED',
-      message: 'Missing bot authentication credentials (HMAC headers or Bearer token required)'
+      message: 'Missing bot authentication credentials (x-bot-timestamp, x-bot-nonce, x-bot-signature required)'
     });
   }
 
@@ -63,8 +70,9 @@ export function verifyBotAuth(req, res, next) {
   }
 
   // Verify HMAC signature
-  // Payload: timestamp + "." + nonce + "." + rawBody (or JSON.stringify(req.body))
-  const bodyString = req.rawBody || JSON.stringify(req.body || {});
+  const bodyString = req.rawBody !== undefined && req.rawBody !== '' 
+    ? req.rawBody 
+    : (req.method === 'GET' ? '' : JSON.stringify(req.body || {}));
   const hmac = crypto.createHmac('sha256', config.botApiSecret);
   hmac.update(`${timestamp}.${nonce}.${bodyString}`);
   const expectedSignature = hmac.digest('hex');
