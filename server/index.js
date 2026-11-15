@@ -113,8 +113,10 @@ export async function app(req, res) {
     await ensureDbReady();
 
     // 1. Attempt API Router match first
-    await router.handle(req, res);
-    if (res.writableEnded) return;
+    const handled = await router.handle(req, res);
+    if (handled || res.headersSent || res.writableEnded) {
+      return;
+    }
 
     const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
     const pathname = parsedUrl.pathname;
@@ -127,11 +129,13 @@ export async function app(req, res) {
     if (filePath.startsWith(publicDir) && fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
       const ext = path.extname(filePath).toLowerCase();
       const contentType = MIME_TYPES[ext] || 'application/octet-stream';
-      res.writeHead(200, {
-        'Content-Type': contentType,
-        'Cache-Control': ext === '.svg' ? 'public, max-age=86400' : 'no-cache, no-store, must-revalidate'
-      });
-      fs.createReadStream(filePath).pipe(res);
+      if (!res.headersSent && !res.writableEnded) {
+        res.writeHead(200, {
+          'Content-Type': contentType,
+          'Cache-Control': ext === '.svg' ? 'public, max-age=86400' : 'no-cache, no-store, must-revalidate'
+        });
+        fs.createReadStream(filePath).pipe(res);
+      }
       return;
     }
 
@@ -139,29 +143,35 @@ export async function app(req, res) {
     if (pathname === '/' || pathname.startsWith('/u/')) {
       const indexPath = path.join(publicDir, 'index.html');
       if (fs.existsSync(indexPath)) {
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        fs.createReadStream(indexPath).pipe(res);
+        if (!res.headersSent && !res.writableEnded) {
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+          fs.createReadStream(indexPath).pipe(res);
+        }
         return;
       }
     }
 
     // 4. 404 Handler
-    if (pathname.startsWith('/api/')) {
-      res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ error: 'NOT_FOUND', message: `Endpoint ${pathname} does not exist` }));
-    } else {
-      res.writeHead(404, { 'Content-Type': 'text/html; charset=utf-8' });
-      res.end(`<!DOCTYPE html><html><body style="background:#09090C;color:#F4F4F6;font-family:sans-serif;text-align:center;padding:50px;">
-        <h1 style="color:#D83C53;">404 — Page Not Found</h1>
-        <p>The requested page or asset does not exist.</p>
-        <a href="/" style="color:#D83C53;text-decoration:none;">Return to Collection</a>
-      </body></html>`);
+    if (!res.headersSent && !res.writableEnded) {
+      if (pathname.startsWith('/api/')) {
+        res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ error: 'NOT_FOUND', message: `Endpoint ${pathname} does not exist` }));
+      } else {
+        res.writeHead(404, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.end(`<!DOCTYPE html><html><body style="background:#09090C;color:#F4F4F6;font-family:sans-serif;text-align:center;padding:50px;">
+          <h1 style="color:#D83C53;">404 — Page Not Found</h1>
+          <p>The requested page or asset does not exist.</p>
+          <a href="/" style="color:#D83C53;text-decoration:none;">Return to Collection</a>
+        </body></html>`);
+      }
     }
   } catch (err) {
     console.error('Unhandled Server Error:', err);
-    if (!res.writableEnded) {
-      res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ error: 'INTERNAL_SERVER_ERROR', message: err.message }));
+    if (!res.headersSent && !res.writableEnded) {
+      try {
+        res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ error: 'INTERNAL_SERVER_ERROR', message: err.message }));
+      } catch (_) {}
     }
   }
 }

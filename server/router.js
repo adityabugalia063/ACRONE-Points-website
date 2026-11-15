@@ -46,20 +46,22 @@ export class Router {
     req.query = Object.fromEntries(parsedUrl.searchParams.entries());
     req.params = {};
 
-    // Helper: res.json
+    // Helper: res.json (safe against double-send)
     res.json = (data, statusCode = 200) => {
+      if (res.headersSent || res.writableEnded) return;
       res.writeHead(statusCode, {
         'Content-Type': 'application/json; charset=utf-8'
       });
       res.end(JSON.stringify(data));
     };
 
-    // Helper: res.status
+    // Helper: res.status (safe against double-send)
     res.status = (code) => {
       res.statusCode = code;
       return {
         json: (data) => res.json(data, code),
         send: (text) => {
+          if (res.headersSent || res.writableEnded) return;
           res.writeHead(code, { 'Content-Type': 'text/plain; charset=utf-8' });
           res.end(text);
         }
@@ -85,11 +87,14 @@ export class Router {
 
       if (errOccurred) {
         console.error('Middleware Error:', errOccurred);
-        return res.status(500).json({ error: 'INTERNAL_ERROR', message: errOccurred.message });
+        if (!res.headersSent && !res.writableEnded) {
+          res.status(500).json({ error: 'INTERNAL_ERROR', message: errOccurred.message });
+        }
+        return true;
       }
 
-      if (!nextCalled && res.writableEnded) {
-        return; // Handled by middleware (e.g. 401 auth rejected)
+      if (!nextCalled && (res.headersSent || res.writableEnded)) {
+        return true; // Handled by middleware (e.g. 401 auth rejected)
       }
     }
 
@@ -131,21 +136,24 @@ export class Router {
           if (errOccurred) {
             console.error('Route Handler Error:', errOccurred);
             const status = errOccurred.code === 'INSUFFICIENT_QUANTITY' ? 400 : 500;
-            return res.status(status).json({
-              error: errOccurred.code || 'HANDLER_ERROR',
-              message: errOccurred.message
-            });
+            if (!res.headersSent && !res.writableEnded) {
+              res.status(status).json({
+                error: errOccurred.code || 'HANDLER_ERROR',
+                message: errOccurred.message
+              });
+            }
+            return true;
           }
 
-          if (res.writableEnded || !nextCalled) {
-            return;
+          if (res.headersSent || res.writableEnded || !nextCalled) {
+            return true;
           }
         }
-        return;
+        return true;
       }
     }
 
     // No route matched
-    return null;
+    return false;
   }
 }
