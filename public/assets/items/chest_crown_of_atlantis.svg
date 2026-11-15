@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100%" height="100%">
+  <defs>
+    <radialGradient id="bg_chest_crown_of_atlantis" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#1F2028"/>
+      <stop offset="100%" stop-color="#0E0F14"/>
+    </radialGradient>
+    <linearGradient id="gold_chest_crown_of_atlantis" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFDF00"/>
+      <stop offset="100%" stop-color="#8B5CF6"/>
+    </linearGradient>
+    <filter id="shadow_chest_crown_of_atlantis">
+      <feDropShadow dx="0" dy="3" stdDeviation="3" flood-color="#8B5CF6" flood-opacity="0.4"/>
+    </filter>
+  </defs>
+  <rect width="96" height="96" x="2" y="2" rx="16" fill="url(#bg_chest_crown_of_atlantis)" stroke="#8B5CF6" stroke-width="1.5" stroke-opacity="0.4"/>
+  <!-- Nautical / Relic Halo -->
+  <circle cx="50" cy="50" r="34" fill="none" stroke="#8B5CF6" stroke-width="1" stroke-dasharray="3,4" stroke-opacity="0.25"/>
+  <!-- Treasure Chest Icon -->
+  <g filter="url(#shadow_chest_crown_of_atlantis)" transform="translate(18, 20) scale(0.65)">
+    <!-- Lower Chest Body -->
+    <rect x="10" y="42" width="80" height="42" rx="6" fill="#2A1B14" stroke="#8B5CF6" stroke-width="3"/>
+    <!-- Iron Straps -->
+    <rect x="22" y="42" width="8" height="42" fill="#8B5CF6" fill-opacity="0.8"/>
+    <rect x="70" y="42" width="8" height="42" fill="#8B5CF6" fill-opacity="0.8"/>
+    <!-- Lid Arc -->
+    <path d="M 10 42 C 10 18, 90 18, 90 42 Z" fill="#3D261C" stroke="#8B5CF6" stroke-width="3"/>
+    <!-- Lid Straps -->
+    <path d="M 22 42 C 22 23, 30 23, 30 42 Z" fill="#8B5CF6" fill-opacity="0.8"/>
+    <path d="M 70 42 C 70 23, 78 23, 78 42 Z" fill="#8B5CF6" fill-opacity="0.8"/>
+    <!-- Keyhole Lock Core -->
+    <rect x="42" y="38" width="16" height="18" rx="3" fill="url(#gold_chest_crown_of_atlantis)" stroke="#000" stroke-width="1.5"/>
+    <circle cx="50" cy="45" r="2.5" fill="#000000"/>
+    <polygon points="49,45 51,45 52,52 48,52" fill="#000000"/>
+    <!-- Glowing Treasure Spill Line -->
+    <line x1="12" y1="42" x2="88" y2="42" stroke="#FFF" stroke-width="2" stroke-opacity="0.8"/>
+  </g>
+  <circle cx="86" cy="14" r="3" fill="#8B5CF6"/>
+</svg>

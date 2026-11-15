@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100%" height="100%">
+  <defs>
+    <radialGradient id="bg_ore_gypsum_rose" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#1F2028"/>
+      <stop offset="100%" stop-color="#0E0F14"/>
+    </radialGradient>
+    <linearGradient id="facetA_ore_gypsum_rose" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.9"/>
+      <stop offset="100%" stop-color="#9CA3AF"/>
+    </linearGradient>
+    <linearGradient id="facetB_ore_gypsum_rose" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#9CA3AF"/>
+      <stop offset="100%" stop-color="#0A0A0F"/>
+    </linearGradient>
+    <filter id="shadow_ore_gypsum_rose">
+      <feDropShadow dx="0" dy="3" stdDeviation="3" flood-color="#9CA3AF" flood-opacity="0.45"/>
+    </filter>
+  </defs>
+  <rect width="96" height="96" x="2" y="2" rx="16" fill="url(#bg_ore_gypsum_rose)" stroke="#9CA3AF" stroke-width="1.5" stroke-opacity="0.4"/>
+  <!-- Subterranean Strata Lines -->
+  <path d="M12 28 L 88 32" stroke="#9CA3AF" stroke-width="1" stroke-opacity="0.15"/>
+  <path d="M12 70 L 88 66" stroke="#9CA3AF" stroke-width="1" stroke-opacity="0.15"/>
+  <!-- Crystalline Cluster -->
+  <g filter="url(#shadow_ore_gypsum_rose)" transform="translate(18, 18) scale(0.65)">
+    <!-- Base Cluster Rocks -->
+    <polygon points="15,75 35,45 65,55 85,85 10,85" fill="url(#facetB_ore_gypsum_rose)" opacity="0.8"/>
+    <!-- Main Crystal Prism -->
+    <polygon points="50,10 75,40 50,85 25,40" fill="url(#facetA_ore_gypsum_rose)"/>
+    <!-- Left Facet -->
+    <polygon points="50,10 25,40 50,85" fill="#9CA3AF" fill-opacity="0.6"/>
+    <!-- Right Facet Highlights -->
+    <polygon points="50,10 75,40 50,85" fill="#FFFFFF" fill-opacity="0.3"/>
+    <!-- Secondary Crystal -->
+    <polygon points="75,30 95,50 80,78 65,55" fill="url(#facetA_ore_gypsum_rose)" opacity="0.9"/>
+    <!-- Sparkle Specular Points -->
+    <polygon points="50,6 52,10 56,10 53,13 54,17 50,14 46,17 47,13 44,10 48,10" fill="#FFFFFF"/>
+  </g>
+  <polygon points="84,12 88,16 84,20 80,16" fill="#9CA3AF"/>
+</svg>
