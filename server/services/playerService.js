@@ -61,11 +61,13 @@ export class PlayerService {
   }
 
   static async getPlayerByPublicId(publicPlayerId) {
+    if (!publicPlayerId || typeof publicPlayerId !== 'string') return null;
+    const clean = publicPlayerId.trim();
     const player = await queryOne(
       `SELECT id, youtube_channel_id, public_player_id, display_name, avatar_url, created_at, updated_at, last_seen_at
        FROM players 
-       WHERE public_player_id = ?`,
-      [publicPlayerId]
+       WHERE public_player_id = ? OR LOWER(display_name) = LOWER(?)`,
+      [clean, clean]
     );
     if (!player) return null;
 

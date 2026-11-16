@@ -76,8 +76,8 @@ function navigate(urlPath, pushState = true) {
   }
 
   // Parse Route
-  // 1. Root: /
-  if (urlPath === '/' || urlPath === '') {
+  // 1. Root: / or /u or /u/
+  if (urlPath === '/' || urlPath === '' || urlPath === '/u' || urlPath === '/u/') {
     state.publicPlayerId = null;
     closeSse();
     renderHomePage();
@@ -96,7 +96,6 @@ function navigate(urlPath, pushState = true) {
 
     if (playerChanged) {
       loadPlayerProfile(newPlayerId);
-      setupSse(newPlayerId);
     } else {
       loadCurrentTab();
     }
@@ -106,6 +105,8 @@ function navigate(urlPath, pushState = true) {
   // Unknown route -> render 404
   renderNotFound('Page Not Found');
 }
+
+window.navigate = navigate;
 
 /* ==========================================================================
    REAL-TIME SERVER-SENT EVENTS (SSE) & CLOUD SYNC
@@ -324,6 +325,7 @@ async function loadPlayerProfile(publicPlayerId, showLoading = true) {
 
     renderProfileShell();
     loadCurrentTab();
+    setupSse(publicPlayerId);
   } catch (err) {
     closeSse();
     renderNetworkError(publicPlayerId, 'Unable to connect to the collection server. Please check your internet connection.');
@@ -438,7 +440,11 @@ function renderHomePage() {
 window.submitHomeSearch = function() {
   const input = document.getElementById('home-search-input');
   if (!input) return;
-  const val = input.value.trim();
+  let val = input.value.trim();
+  if (!val) return;
+
+  // Clean leading @ if user pasted a YouTube handle
+  val = val.replace(/^@/, '').trim();
   if (!val) return;
 
   if (val.startsWith('usr_')) {
@@ -775,12 +781,21 @@ function renderCollectionItems(collectionData, searchQuery = '') {
         <p>No items match your active search or filters. Try resetting the filters above.</p>
        </div>`;
 
+  // If toolbar and search input already exist, update only grid to preserve user input focus
+  const existingGrid = document.getElementById('items-grid-container');
+  const countDisplay = document.getElementById('items-count-display');
+  if (existingGrid && document.getElementById('item-search-input')) {
+    existingGrid.innerHTML = itemsGridMarkup;
+    if (countDisplay) countDisplay.textContent = displayItems.length;
+    return;
+  }
+
   tabContent.innerHTML = `
     <!-- Toolbar Controls -->
     <div class="toolbar-wrap">
       <div class="search-box">
         <span class="search-icon">🔍</span>
-        <input type="text" placeholder="Search by item name..." value="${escapeHtml(state.filters.search)}" oninput="handleSearchInput(this.value)" />
+        <input type="text" id="item-search-input" placeholder="Search by item name..." value="${escapeHtml(state.filters.search)}" oninput="handleSearchInput(this.value)" />
       </div>
 
       <!-- Rarity Filters -->
@@ -813,13 +828,13 @@ function renderCollectionItems(collectionData, searchQuery = '') {
     <!-- Category Progress Strip -->
     <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; padding: 0 4px;">
       <span style="font-size: 0.9rem; color: var(--text-secondary);">
-        Showing <strong style="color: var(--text-main);">${displayItems.length}</strong> items (${summary.discovered} discovered / ${summary.total} total in catalogue)
+        Showing <strong style="color: var(--text-main);" id="items-count-display">${displayItems.length}</strong> items (${summary.discovered} discovered / ${summary.total} total in catalogue)
       </span>
       <span style="font-size: 0.85rem; font-weight: 700; color: var(--accent-crimson);">${summary.completionPercentage}% Complete</span>
     </div>
 
     <!-- Cards Grid -->
-    <div class="items-grid">
+    <div class="items-grid" id="items-grid-container">
       ${itemsGridMarkup}
     </div>
   `;

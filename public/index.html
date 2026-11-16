@@ -27,8 +27,8 @@
   </noscript>
 
   <!-- Preload & Link Stylesheet -->
-  <link rel="preload" as="style" href="/css/app.css?v=1.6">
-  <link rel="stylesheet" href="/css/app.css?v=1.6">
+  <link rel="preload" as="style" href="/css/app.css?v=1.7">
+  <link rel="stylesheet" href="/css/app.css?v=1.7">
   <link rel="icon" type="image/svg+xml" href="/assets/badges/first_catch.svg">
 </head>
 <body>
@@ -36,7 +36,7 @@
     <!-- Instant Pre-rendered Shell for Sub-Second First Contentful Paint & LCP -->
     <header class="site-header">
       <div class="container header-inner">
-        <a href="/" class="brand-logo" onclick="event.preventDefault(); navigate('/');">
+        <a href="/" class="brand-logo" onclick="if(window.navigate){event.preventDefault();navigate('/');}">
           <div class="brand-icon">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#FFF" stroke-width="2.5"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
           </div>
@@ -78,6 +78,6 @@
   </div>
 
   <!-- Client Application with Defer -->
-  <script src="/js/app.js?v=1.6" defer></script>
+  <script src="/js/app.js?v=1.7" defer></script>
 </body>
 </html>

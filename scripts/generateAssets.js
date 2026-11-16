@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { getDb } from '../server/db/index.js';
+import { ensureDbReady, queryAll } from '../server/db/index.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -12,8 +12,6 @@ const badgesDir = path.join(publicDir, 'assets/badges');
 
 if (!fs.existsSync(itemsDir)) fs.mkdirSync(itemsDir, { recursive: true });
 if (!fs.existsSync(badgesDir)) fs.mkdirSync(badgesDir, { recursive: true });
-
-const db = getDb();
 
 // Rarity glow maps
 const rarityColors = {
@@ -180,44 +178,53 @@ function generateBadgeSvg(badge) {
 </svg>`;
 }
 
-// Generate all item assets
-const items = db.prepare(`
-  SELECT ci.*, r.id as rarity_id
-  FROM catalog_items ci
-  JOIN rarities r ON ci.rarity_id = r.id
-`).all();
+async function generateAllAssets() {
+  await ensureDbReady();
 
-let countItems = 0;
-for (const item of items) {
-  const color = rarityColors[item.rarity_id] || '#9CA3AF';
-  let svgContent = '';
-  if (item.category === 'fish') {
-    svgContent = generateFishSvg(item, color);
-  } else if (item.category === 'mining') {
-    svgContent = generateMiningSvg(item, color);
-  } else {
-    svgContent = generateChestSvg(item, color);
+  // Generate all item assets
+  const items = await queryAll(`
+    SELECT ci.*, r.id as rarity_id
+    FROM catalog_items ci
+    JOIN rarities r ON ci.rarity_id = r.id
+  `);
+
+  let countItems = 0;
+  for (const item of items) {
+    const color = rarityColors[item.rarity_id] || '#9CA3AF';
+    let svgContent = '';
+    if (item.category === 'fish') {
+      svgContent = generateFishSvg(item, color);
+    } else if (item.category === 'mining') {
+      svgContent = generateMiningSvg(item, color);
+    } else {
+      svgContent = generateChestSvg(item, color);
+    }
+
+    const filePath = path.join(itemsDir, `${item.id}.svg`);
+    fs.writeFileSync(filePath, svgContent, 'utf8');
+    countItems++;
   }
 
-  const filePath = path.join(itemsDir, `${item.id}.svg`);
-  fs.writeFileSync(filePath, svgContent, 'utf8');
-  countItems++;
+  // Fallback generic item
+  fs.writeFileSync(path.join(itemsDir, 'fallback_item.svg'), generateFishSvg({ id: 'fallback' }, '#777782'), 'utf8');
+
+  // Generate all badge assets
+  const badges = await queryAll('SELECT * FROM achievements');
+  let countBadges = 0;
+  for (const badge of badges) {
+    const svg = generateBadgeSvg(badge);
+    const badgeFile = path.basename(badge.badge_icon) || `${badge.id}.svg`;
+    fs.writeFileSync(path.join(badgesDir, badgeFile), svg, 'utf8');
+    countBadges++;
+  }
+
+  // Fallback generic badge
+  fs.writeFileSync(path.join(badgesDir, 'fallback_badge.svg'), generateBadgeSvg({ id: 'fallback' }), 'utf8');
+
+  console.log(`🎨 Successfully generated ${countItems} collectible SVG vector artworks and ${countBadges} badge icons!`);
 }
 
-// Fallback generic item
-fs.writeFileSync(path.join(itemsDir, 'fallback_item.svg'), generateFishSvg({ id: 'fallback' }, '#777782'), 'utf8');
-
-// Generate all badge assets
-const badges = db.prepare('SELECT * FROM achievements').all();
-let countBadges = 0;
-for (const badge of badges) {
-  const svg = generateBadgeSvg(badge);
-  const badgeFile = path.basename(badge.badge_icon) || `${badge.id}.svg`;
-  fs.writeFileSync(path.join(badgesDir, badgeFile), svg, 'utf8');
-  countBadges++;
-}
-
-// Fallback generic badge
-fs.writeFileSync(path.join(badgesDir, 'fallback_badge.svg'), generateBadgeSvg({ id: 'fallback' }), 'utf8');
-
-console.log(`🎨 Successfully generated ${countItems} collectible SVG vector artworks and ${countBadges} badge icons!`);
+generateAllAssets().catch((err) => {
+  console.error('❌ Asset generation failed:', err);
+  process.exit(1);
+});

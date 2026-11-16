@@ -79,6 +79,17 @@ test('Public API & Privacy Security Suite', async (t) => {
     assert.strictEqual(res.json.error, 'PLAYER_NOT_FOUND');
   });
 
+  await t.test('Public player profile can be accessed by display name as well as publicPlayerId', async () => {
+    const res = await dispatch(router, {
+      method: 'GET',
+      url: '/api/public/players/PublicTestCollector'
+    });
+
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.json.player.displayName, 'PublicTestCollector');
+    assert.strictEqual(res.json.player.publicPlayerId, testPlayerId);
+  });
+
   await t.test('Returns active catalogue and rarity definitions', async () => {
     const res = await dispatch(router, {
       method: 'GET',

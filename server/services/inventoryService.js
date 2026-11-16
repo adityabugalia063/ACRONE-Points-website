@@ -380,9 +380,10 @@ export class InventoryService {
     statusFilter = null,
     sortBy = 'rarity'
   }) {
+    const cleanId = (publicPlayerId || '').trim();
     const player = await queryOne(
-      'SELECT id, public_player_id, display_name FROM players WHERE public_player_id = ?',
-      [publicPlayerId]
+      'SELECT id, public_player_id, display_name FROM players WHERE public_player_id = ? OR LOWER(display_name) = LOWER(?)',
+      [cleanId, cleanId]
     );
     if (!player) return null;
 

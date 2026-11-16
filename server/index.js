@@ -101,7 +101,9 @@ const MIME_TYPES = {
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
   '.ico': 'image/x-icon',
-  '.woff2': 'font/woff2'
+  '.woff2': 'font/woff2',
+  '.woff': 'font/woff',
+  '.webp': 'image/webp'
 };
 
 function sendStatic(req, res, filePath, contentType, cacheControl = 'public, max-age=86400') {
@@ -119,10 +121,16 @@ function sendStatic(req, res, filePath, contentType, cacheControl = 'public, max
   if (useGzip) {
     headers['Content-Encoding'] = 'gzip';
     res.writeHead(200, headers);
-    fs.createReadStream(filePath).pipe(zlib.createGzip({ level: 6 })).pipe(res);
+    const stream = fs.createReadStream(filePath);
+    const zip = zlib.createGzip({ level: 6 });
+    stream.on('error', () => { if (!res.writableEnded) res.end(); });
+    zip.on('error', () => { if (!res.writableEnded) res.end(); });
+    stream.pipe(zip).pipe(res);
   } else {
     res.writeHead(200, headers);
-    fs.createReadStream(filePath).pipe(res);
+    const stream = fs.createReadStream(filePath);
+    stream.on('error', () => { if (!res.writableEnded) res.end(); });
+    stream.pipe(res);
   }
 }
 
@@ -158,7 +166,7 @@ export async function app(req, res) {
     }
 
     // 3. Fallback for public web client (SPA routing for /u/* and /)
-    if (pathname === '/' || pathname.startsWith('/u/')) {
+    if (pathname === '/' || pathname === '/u' || pathname.startsWith('/u/')) {
       const indexPath = path.join(publicDir, 'index.html');
       if (fs.existsSync(indexPath)) {
         sendStatic(req, res, indexPath, 'text/html; charset=utf-8', 'no-cache');
