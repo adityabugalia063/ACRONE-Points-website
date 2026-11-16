@@ -1307,3 +1307,16 @@ button {
     justify-content: center;
   }
 }
+
+/* Tactile Input Validation Feedback */
+@keyframes inputShake {
+  0%, 100% { transform: translateX(0); }
+  20%, 60% { transform: translateX(-6px); }
+  40%, 80% { transform: translateX(6px); }
+}
+
+.input-shake {
+  animation: inputShake 0.4s ease-in-out !important;
+  border-color: var(--accent-crimson) !important;
+  box-shadow: 0 0 12px rgba(216, 60, 83, 0.5) !important;
+}

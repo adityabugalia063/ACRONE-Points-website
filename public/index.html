@@ -27,8 +27,8 @@
   </noscript>
 
   <!-- Preload & Link Stylesheet -->
-  <link rel="preload" as="style" href="/css/app.css?v=1.7">
-  <link rel="stylesheet" href="/css/app.css?v=1.7">
+  <link rel="preload" as="style" href="/css/app.css?v=1.8">
+  <link rel="stylesheet" href="/css/app.css?v=1.8">
   <link rel="icon" type="image/svg+xml" href="/assets/badges/first_catch.svg">
 </head>
 <body>
@@ -50,9 +50,9 @@
         <h1>EVERY CATCH. EVERY GEM.<br><span style="color: var(--accent-crimson);">PUBLIC SHOWCASE.</span></h1>
         <p>The companion collection viewer for Goti. Play Fishing, Mining, and Mystery Chests during YouTube livestreams and explore your inventory anytime.</p>
         
-        <form id="home-search-form" class="home-search-bar" onsubmit="event.preventDefault(); submitHomeSearch();">
-          <input type="text" id="home-search-input" class="home-search-input" placeholder="Enter your YouTube username or Collection ID (usr_...)..." required />
-          <button type="submit" class="home-search-btn">EXPLORE</button>
+        <form id="home-search-form" class="home-search-bar" onsubmit="event.preventDefault(); window.submitHomeSearch && window.submitHomeSearch();">
+          <input type="text" id="home-search-input" class="home-search-input" placeholder="Enter your YouTube username or Collection ID (usr_...)..." autocomplete="off" />
+          <button type="submit" id="home-search-btn" class="home-search-btn" onclick="event.preventDefault(); window.submitHomeSearch && window.submitHomeSearch();">EXPLORE</button>
         </form>
       </div>
 
@@ -78,6 +78,6 @@
   </div>
 
   <!-- Client Application with Defer -->
-  <script src="/js/app.js?v=1.7" defer></script>
+  <script src="/js/app.js?v=1.8" defer></script>
 </body>
 </html>

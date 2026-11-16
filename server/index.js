@@ -160,7 +160,7 @@ export async function app(req, res) {
     if (filePath.startsWith(publicDir) && fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
       const ext = path.extname(filePath).toLowerCase();
       const contentType = MIME_TYPES[ext] || 'application/octet-stream';
-      const cacheControl = ext === '.html' ? 'no-cache' : 'public, max-age=86400';
+      const cacheControl = (ext === '.html' || ext === '.js' || ext === '.css') ? 'no-cache' : 'public, max-age=86400';
       sendStatic(req, res, filePath, contentType, cacheControl);
       return;
     }

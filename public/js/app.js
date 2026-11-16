@@ -30,6 +30,23 @@ function startApp() {
   initRouter();
   window.addEventListener('popstate', handlePopState);
   document.body.addEventListener('click', handleLinkClick);
+
+  // Delegated search form submission listener
+  document.addEventListener('submit', (e) => {
+    if (e.target && (e.target.id === 'home-search-form' || e.target.classList.contains('home-search-bar'))) {
+      e.preventDefault();
+      submitHomeSearch();
+    }
+  });
+
+  // Delegated search button click listener
+  document.addEventListener('click', (e) => {
+    const btn = e.target.closest('#home-search-btn, .home-search-btn');
+    if (btn && btn.closest('#home-search-form, .home-search-bar')) {
+      e.preventDefault();
+      submitHomeSearch();
+    }
+  });
 }
 
 if (document.readyState === 'loading') {
@@ -79,6 +96,9 @@ function navigate(urlPath, pushState = true) {
   // 1. Root: / or /u or /u/
   if (urlPath === '/' || urlPath === '' || urlPath === '/u' || urlPath === '/u/') {
     state.publicPlayerId = null;
+    state.player = null;
+    state.stats = null;
+    state.collection = null;
     closeSse();
     renderHomePage();
     return;
@@ -87,14 +107,14 @@ function navigate(urlPath, pushState = true) {
   // 2. Profile: /u/:publicPlayerId or /u/:publicPlayerId/:tab
   const match = urlPath.match(/^\/u\/([^/]+)(?:\/([^/]+))?/);
   if (match) {
-    const newPlayerId = match[1];
+    const newPlayerId = decodeURIComponent(match[1]);
     const newTab = match[2] || 'overview';
 
     const playerChanged = state.publicPlayerId !== newPlayerId;
     state.publicPlayerId = newPlayerId;
     state.activeTab = ['fish', 'mining', 'chest', 'achievements'].includes(newTab) ? newTab : 'overview';
 
-    if (playerChanged) {
+    if (playerChanged || !state.player) {
       loadPlayerProfile(newPlayerId);
     } else {
       loadCurrentTab();
@@ -107,6 +127,69 @@ function navigate(urlPath, pushState = true) {
 }
 
 window.navigate = navigate;
+
+function submitHomeSearch() {
+  const input = document.getElementById('home-search-input');
+  const btn = document.querySelector('.home-search-btn, #home-search-btn');
+  if (!input) return;
+
+  let val = input.value.trim();
+  val = val.replace(/^@/, '').trim();
+
+  if (!val) {
+    input.focus();
+    input.classList.add('input-shake');
+    setTimeout(() => input.classList.remove('input-shake'), 600);
+    showToast('Input Required', 'Please enter your YouTube username or Collection ID.', '#EF4444');
+    return;
+  }
+
+  // Immediate visual feedback on the button
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = `<span class="pulse-dot" style="margin-right: 6px; width: 8px; height: 8px; display: inline-block;"></span> EXPLORING...`;
+  }
+
+  const resetButton = () => {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = 'EXPLORE';
+    }
+  };
+
+  // If input is directly a publicPlayerId (starts with usr_)
+  if (val.toLowerCase().startsWith('usr_')) {
+    navigate(`/u/${encodeURIComponent(val)}`, true);
+    return;
+  }
+
+  // Lookup via public search endpoint
+  fetch(`/api/public/search?query=${encodeURIComponent(val)}`)
+    .then((res) => {
+      if (!res.ok) throw new Error('Search failed');
+      return res.json();
+    })
+    .then((data) => {
+      if (data.results && data.results.length > 0) {
+        // Find exact match first (case-insensitive)
+        const exactMatch = data.results.find(
+          (r) => r.displayName && r.displayName.toLowerCase() === val.toLowerCase()
+        );
+        const targetUrl = exactMatch ? exactMatch.profileUrl : data.results[0].profileUrl;
+        navigate(targetUrl, true);
+      } else {
+        // Unregistered player -> route to dedicated Profile Not Found view
+        navigate(`/u/${encodeURIComponent(val)}`, true);
+      }
+    })
+    .catch(() => {
+      resetButton();
+      // Even if search endpoint encounters an error, route directly to player profile URL
+      navigate(`/u/${encodeURIComponent(val)}`, true);
+    });
+}
+
+window.submitHomeSearch = submitHomeSearch;
 
 /* ==========================================================================
    REAL-TIME SERVER-SENT EVENTS (SSE) & CLOUD SYNC
@@ -409,9 +492,9 @@ function renderHomePage() {
         <h1>EVERY CATCH. EVERY GEM.<br><span style="color: var(--accent-crimson);">PUBLIC SHOWCASE.</span></h1>
         <p>The companion collection viewer for Goti. Play Fishing, Mining, and Mystery Chests during YouTube livestreams and explore your inventory anytime.</p>
         
-        <form id="home-search-form" class="home-search-bar" onsubmit="event.preventDefault(); submitHomeSearch();">
-          <input type="text" id="home-search-input" class="home-search-input" placeholder="Enter your YouTube username or Collection ID (usr_...)..." required />
-          <button type="submit" class="home-search-btn">EXPLORE</button>
+        <form id="home-search-form" class="home-search-bar" onsubmit="event.preventDefault(); window.submitHomeSearch && window.submitHomeSearch();">
+          <input type="text" id="home-search-input" class="home-search-input" placeholder="Enter your YouTube username or Collection ID (usr_...)..." autocomplete="off" />
+          <button type="submit" id="home-search-btn" class="home-search-btn" onclick="event.preventDefault(); window.submitHomeSearch && window.submitHomeSearch();">EXPLORE</button>
         </form>
       </div>
 
@@ -436,39 +519,6 @@ function renderHomePage() {
     </footer>
   `;
 }
-
-window.submitHomeSearch = function() {
-  const input = document.getElementById('home-search-input');
-  if (!input) return;
-  let val = input.value.trim();
-  if (!val) return;
-
-  // Clean leading @ if user pasted a YouTube handle
-  val = val.replace(/^@/, '').trim();
-  if (!val) return;
-
-  if (val.startsWith('usr_')) {
-    navigate(`/u/${encodeURIComponent(val)}`, true);
-  } else {
-    // Quick search by name
-    fetch(`/api/public/search?query=${encodeURIComponent(val)}`)
-      .then(res => {
-        if (!res.ok) throw new Error('Search failed');
-        return res.json();
-      })
-      .then(data => {
-        if (data.results && data.results.length > 0) {
-          navigate(data.results[0].profileUrl, true);
-        } else {
-          // No registered profile found for name -> route to dedicated Profile Not Found view
-          navigate(`/u/${encodeURIComponent(val)}`, true);
-        }
-      })
-      .catch(() => {
-        showToast('Search Failed', 'Could not reach server. Please check your network and try again.', '#EF4444');
-      });
-  }
-};
 
 /* ==========================================================================
    RENDERERS — PROFILE SHELL & STATS
