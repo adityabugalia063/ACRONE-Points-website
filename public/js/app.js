@@ -289,9 +289,16 @@ async function loadPlayerProfile(publicPlayerId, showLoading = true) {
   }
 
   try {
-    const res = await fetch(`/api/public/players/${publicPlayerId}`);
+    const res = await fetch(`/api/public/players/${encodeURIComponent(publicPlayerId)}`);
     if (res.status === 404) {
-      renderNotFound(`Player profile '${publicPlayerId}' does not exist.`);
+      closeSse();
+      renderProfileNotFound(publicPlayerId);
+      return;
+    }
+
+    if (res.status >= 500 || !res.ok) {
+      closeSse();
+      renderServerError(publicPlayerId, 'The collection database is temporarily unavailable. Please try again in a few moments.');
       return;
     }
 
@@ -303,7 +310,8 @@ async function loadPlayerProfile(publicPlayerId, showLoading = true) {
     renderProfileShell();
     loadCurrentTab();
   } catch (err) {
-    renderNotFound('Error loading collection. Please check your network and try again.');
+    closeSse();
+    renderNetworkError(publicPlayerId, 'Unable to connect to the collection server. Please check your internet connection.');
   }
 }
 
@@ -370,11 +378,11 @@ function renderHomePage() {
   appEl.innerHTML = `
     <header class="site-header">
       <div class="container header-inner">
-        <a href="/" class="brand-logo">
+        <a href="/" class="brand-logo" onclick="event.preventDefault(); navigate('/');">
           <div class="brand-icon">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#FFF" stroke-width="2.5"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
           </div>
-          <div><span class="brand-text-accent">COLLECTION</span></div>
+          <div><span>ACRONE </span><span class="brand-text-accent">COLLECTION</span></div>
         </a>
       </div>
     </header>
@@ -391,7 +399,7 @@ function renderHomePage() {
       </div>
 
       <div style="background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); padding: 32px; margin: 24px 0 32px;">
-        <h3 style="font-size: 1.35rem; margin-bottom: 12px; color: var(--text-main);">How Collection Works</h3>
+        <h3 style="font-size: 1.35rem; margin-bottom: 12px; color: var(--text-main);">How Acrone Collection Works</h3>
         <p style="color: var(--text-secondary); font-size: 0.95rem; line-height: 1.6; margin-bottom: 20px;">
           Viewers participate in chat mini-games during the stream. Type <code>!fish</code>, <code>!mine</code>, or <code>!chest</code> to discover collectibles.
           To get your personal public collection link in YouTube chat, simply type:
@@ -416,20 +424,28 @@ window.submitHomeSearch = function() {
   const input = document.getElementById('home-search-input');
   if (!input) return;
   const val = input.value.trim();
+  if (!val) return;
+
   if (val.startsWith('usr_')) {
-    navigate(`/u/${val}`, true);
+    navigate(`/u/${encodeURIComponent(val)}`, true);
   } else {
     // Quick search by name
     fetch(`/api/public/search?query=${encodeURIComponent(val)}`)
-      .then(res => res.json())
+      .then(res => {
+        if (!res.ok) throw new Error('Search failed');
+        return res.json();
+      })
       .then(data => {
         if (data.results && data.results.length > 0) {
           navigate(data.results[0].profileUrl, true);
         } else {
-          alert(`No collection profile found for "${val}". Type !collection in stream chat to get your public profile link!`);
+          // No registered profile found for name -> route to dedicated Profile Not Found view
+          navigate(`/u/${encodeURIComponent(val)}`, true);
         }
       })
-      .catch(() => alert('Search failed. Please check your network and try again.'));
+      .catch(() => {
+        showToast('Search Failed', 'Could not reach server. Please check your network and try again.', '#EF4444');
+      });
   }
 };
 
@@ -449,11 +465,11 @@ function renderProfileShell() {
     <!-- Sticky Navigation Header -->
     <header class="site-header">
       <div class="container header-inner">
-        <a href="/" class="brand-logo">
+        <a href="/" class="brand-logo" onclick="event.preventDefault(); navigate('/');">
           <div class="brand-icon">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#FFF" stroke-width="2.5"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
           </div>
-          <div><span class="brand-text-accent">COLLECTION</span></div>
+          <div><span>ACRONE </span><span class="brand-text-accent">COLLECTION</span></div>
         </a>
 
         <div class="header-status-badge" id="sse-indicator">
@@ -945,15 +961,20 @@ window.closeModalOnBackdrop = function(e) {
 
 window.copyProfileLink = function() {
   const url = window.location.origin + `/u/${state.publicPlayerId}`;
-  navigator.clipboard.writeText(url).then(() => {
-    const btnText = document.getElementById('copy-btn-text');
-    if (btnText) {
-      btnText.textContent = 'Copied Link!';
-      setTimeout(() => { btnText.textContent = 'Share Profile'; }, 2000);
-    }
-  }).catch(() => {
-    prompt('Copy public profile URL:', url);
-  });
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(url).then(() => {
+      const btnText = document.getElementById('copy-btn-text');
+      if (btnText) {
+        btnText.textContent = 'Copied Link!';
+        setTimeout(() => { btnText.textContent = 'Share Profile'; }, 2000);
+      }
+      showToast('Profile Link Copied', 'Public collection link copied to clipboard.', '#D83C53');
+    }).catch(() => {
+      showToast('Profile Link', url, '#D83C53');
+    });
+  } else {
+    showToast('Profile Link', url, '#D83C53');
+  }
 };
 
 function renderLoadingState(message) {
@@ -965,29 +986,244 @@ function renderLoadingState(message) {
   `;
 }
 
-function renderNotFound(msg) {
+function renderProfileNotFound(attemptedId) {
   const appEl = document.getElementById('app');
+  const targetLabel = attemptedId ? `<div class="not-found-target">Player: <span class="target-id-badge">${escapeHtml(attemptedId)}</span></div>` : '';
+
   appEl.innerHTML = `
     <header class="site-header">
       <div class="container header-inner">
-        <a href="/" class="brand-logo">
+        <a href="/" class="brand-logo" onclick="event.preventDefault(); navigate('/');">
           <div class="brand-icon">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#FFF" stroke-width="2.5"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
           </div>
-          <div><span class="brand-text-accent">COLLECTION</span></div>
+          <div><span>ACRONE </span><span class="brand-text-accent">COLLECTION</span></div>
         </a>
       </div>
     </header>
 
-    <main class="container page-main">
-      <div class="empty-state">
-        <h3 style="color: var(--accent-crimson);">Collector Not Found</h3>
-        <p>${escapeHtml(msg)}</p>
-        <a href="/" class="btn-action" style="display: inline-flex; margin-top: 12px;">Return to Collection</a>
+    <main class="not-found-wrapper">
+      <div class="not-found-card">
+        <!-- Missing profile illustration with gaming esports motif -->
+        <div class="not-found-icon-wrap">
+          <svg width="84" height="84" viewBox="0 0 84 84" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="42" cy="42" r="40" stroke="#D83C53" stroke-width="2" stroke-dasharray="5 5" stroke-opacity="0.6"/>
+            <circle cx="42" cy="42" r="33" fill="rgba(216, 60, 83, 0.08)"/>
+            <circle cx="42" cy="31" r="11" stroke="#D83C53" stroke-width="2.5" fill="none"/>
+            <path d="M24 59C24 49.5 32 45 42 45C52 45 60 49.5 60 59" stroke="#D83C53" stroke-width="2.5" stroke-linecap="round"/>
+            <circle cx="58" cy="26" r="9" fill="#D83C53"/>
+            <path d="M56.5 24C56.5 23.2 57.2 22.5 58 22.5C58.8 22.5 59.5 23.2 59.5 24C59.5 25 58 25.8 58 26.6M58 28.5V29" stroke="#FFF" stroke-width="1.8" stroke-linecap="round"/>
+          </svg>
+        </div>
+
+        <div>
+          <span class="not-found-pill">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+            UNREGISTERED PLAYER
+          </span>
+        </div>
+
+        <h1 class="not-found-title">PROFILE NOT FOUND</h1>
+        ${targetLabel}
+        <h2 class="not-found-subheading">This collection profile doesn't exist yet.</h2>
+
+        <p class="not-found-desc">
+          Looks like this player hasn't registered their collection profile yet.<br>
+          Want to see their collection? Ask them to join the stream and type the following command in the stream chat:
+        </p>
+
+        <!-- Command Box -->
+        <div class="command-box">
+          <div class="command-box-label">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            YouTube Stream Chat Command
+          </div>
+          <div class="command-box-content">
+            <span class="command-code">!collection</span>
+            <button type="button" class="btn-copy-command" onclick="copyChatCommand(this)" title="Copy command to clipboard">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+              <span>COPY</span>
+            </button>
+          </div>
+          <div class="command-box-hint">
+            The command will help them get their public collection profile link.
+          </div>
+        </div>
+
+        <!-- Future Note Callout -->
+        <div class="not-found-future-note">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 14 14"/></svg>
+          <span>Once their profile is available, you'll be able to explore their collection, rare items, achievements and progress.</span>
+        </div>
+
+        <!-- Action Buttons -->
+        <div class="not-found-actions">
+          <button type="button" class="btn-primary-action" onclick="navigate('/')">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+            Back to Collection
+          </button>
+          <button type="button" class="btn-secondary-action" onclick="retryLoadProfile('${escapeHtml(attemptedId)}')">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+            Try Again
+          </button>
+        </div>
       </div>
     </main>
   `;
 }
+
+function renderServerError(attemptedId, message) {
+  const appEl = document.getElementById('app');
+  const targetLabel = attemptedId ? `<div class="not-found-target">Target: <span class="target-id-badge">${escapeHtml(attemptedId)}</span></div>` : '';
+
+  appEl.innerHTML = `
+    <header class="site-header">
+      <div class="container header-inner">
+        <a href="/" class="brand-logo" onclick="event.preventDefault(); navigate('/');">
+          <div class="brand-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#FFF" stroke-width="2.5"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+          </div>
+          <div><span>ACRONE </span><span class="brand-text-accent">COLLECTION</span></div>
+        </a>
+      </div>
+    </header>
+
+    <main class="not-found-wrapper">
+      <div class="not-found-card server-error">
+        <div class="not-found-icon-wrap">
+          <svg width="84" height="84" viewBox="0 0 84 84" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="42" cy="42" r="40" stroke="#F59E0B" stroke-width="2" stroke-dasharray="5 5" stroke-opacity="0.6"/>
+            <circle cx="42" cy="42" r="33" fill="rgba(245, 158, 11, 0.08)"/>
+            <path d="M42 26V46M42 54V56" stroke="#F59E0B" stroke-width="3" stroke-linecap="round"/>
+          </svg>
+        </div>
+
+        <div>
+          <span class="not-found-pill pill-warning">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            DATABASE TEMPORARILY UNAVAILABLE
+          </span>
+        </div>
+
+        <h1 class="not-found-title">SERVER ERROR</h1>
+        ${targetLabel}
+        <h2 class="not-found-subheading">Unable to fetch collection data at this time</h2>
+
+        <p class="not-found-desc">
+          ${escapeHtml(message || 'The collection database is temporarily unavailable. Your items are safe, please try again in a few moments.')}
+        </p>
+
+        <div class="not-found-actions">
+          <button type="button" class="btn-primary-action" onclick="retryLoadProfile('${escapeHtml(attemptedId)}')">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+            Retry Connection
+          </button>
+          <button type="button" class="btn-secondary-action" onclick="navigate('/')">
+            Back to Collection
+          </button>
+        </div>
+      </div>
+    </main>
+  `;
+}
+
+function renderNetworkError(attemptedId, message) {
+  const appEl = document.getElementById('app');
+  const targetLabel = attemptedId ? `<div class="not-found-target">Target: <span class="target-id-badge">${escapeHtml(attemptedId)}</span></div>` : '';
+
+  appEl.innerHTML = `
+    <header class="site-header">
+      <div class="container header-inner">
+        <a href="/" class="brand-logo" onclick="event.preventDefault(); navigate('/');">
+          <div class="brand-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#FFF" stroke-width="2.5"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+          </div>
+          <div><span>ACRONE </span><span class="brand-text-accent">COLLECTION</span></div>
+        </a>
+      </div>
+    </header>
+
+    <main class="not-found-wrapper">
+      <div class="not-found-card network-error">
+        <div class="not-found-icon-wrap">
+          <svg width="84" height="84" viewBox="0 0 84 84" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="42" cy="42" r="40" stroke="#EF4444" stroke-width="2" stroke-dasharray="5 5" stroke-opacity="0.6"/>
+            <circle cx="42" cy="42" r="33" fill="rgba(239, 68, 68, 0.08)"/>
+            <line x1="28" y1="28" x2="56" y2="56" stroke="#EF4444" stroke-width="2.5" stroke-linecap="round"/>
+            <path d="M34 42C34 37.5 37.5 34 42 34C44.5 34 46.8 35.1 48.3 36.8" stroke="#EF4444" stroke-width="2" stroke-linecap="round"/>
+            <circle cx="42" cy="52" r="2.5" fill="#EF4444"/>
+          </svg>
+        </div>
+
+        <div>
+          <span class="not-found-pill pill-danger">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>
+            CONNECTION FAILED
+          </span>
+        </div>
+
+        <h1 class="not-found-title">OFFLINE</h1>
+        ${targetLabel}
+        <h2 class="not-found-subheading">Unable to connect to collection server</h2>
+
+        <p class="not-found-desc">
+          ${escapeHtml(message || 'Please check your internet connection or verify your network access.')}
+        </p>
+
+        <div class="not-found-actions">
+          <button type="button" class="btn-primary-action" onclick="retryLoadProfile('${escapeHtml(attemptedId)}')">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+            Try Again
+          </button>
+          <button type="button" class="btn-secondary-action" onclick="navigate('/')">
+            Back to Collection
+          </button>
+        </div>
+      </div>
+    </main>
+  `;
+}
+
+function renderNotFound(msg) {
+  renderProfileNotFound(msg);
+}
+
+window.copyChatCommand = function(btnEl) {
+  const text = '!collection';
+  const onSuccess = () => {
+    if (btnEl) {
+      btnEl.classList.add('copied');
+      const span = btnEl.querySelector('span');
+      if (span) span.textContent = 'COPIED!';
+      setTimeout(() => {
+        btnEl.classList.remove('copied');
+        if (span) span.textContent = 'COPY';
+      }, 2000);
+    }
+    showToast('Command Copied', 'Paste !collection in YouTube stream chat to register your profile link.', '#10B981');
+  };
+
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(onSuccess).catch(() => {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); onSuccess(); } catch (e) {}
+      document.body.removeChild(ta);
+    });
+  } else {
+    onSuccess();
+  }
+};
+
+window.retryLoadProfile = function(identifier) {
+  if (!identifier) {
+    navigate('/', true);
+    return;
+  }
+  loadPlayerProfile(identifier, true);
+};
 
 function escapeHtml(str) {
   if (!str) return '';
