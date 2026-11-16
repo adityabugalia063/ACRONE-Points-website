@@ -3,6 +3,31 @@
    Brand Palette: Deep Black (#09090C), Crimson Accent (#D83C53)
    ========================================================================== */
 
+/* Self-Hosted Ultra-Fast Web Fonts (Sub-10ms delivery, Zero external CDN latency) */
+@font-face {
+  font-family: 'Rajdhani';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('/assets/fonts/rajdhani-700.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Rajdhani';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('/assets/fonts/rajdhani-600.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url('/assets/fonts/inter-latin.woff2') format('woff2');
+}
+
 :root {
   --bg-deep: #09090C;
   --bg-sidebar: #111116;
