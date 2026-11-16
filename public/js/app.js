@@ -25,7 +25,12 @@ const state = {
   toastTimeout: null
 };
 
-// Initialize App immediately if DOM is ready, or on DOMContentLoaded
+// Real-time SSE and Sync State (Top-level declarations to prevent TDZ ReferenceErrors)
+let syncMissedEventsTimer = null;
+let lastSyncTimestamp = Date.now();
+const processedEventIds = new Set();
+
+// Initialize App
 function startApp() {
   initRouter();
   window.addEventListener('popstate', handlePopState);
@@ -47,12 +52,6 @@ function startApp() {
       submitHomeSearch();
     }
   });
-}
-
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', startApp);
-} else {
-  startApp();
 }
 
 /* ==========================================================================
@@ -195,10 +194,6 @@ window.submitHomeSearch = submitHomeSearch;
    REAL-TIME SERVER-SENT EVENTS (SSE) & CLOUD SYNC
    ========================================================================== */
 
-let syncMissedEventsTimer = null;
-let lastSyncTimestamp = Date.now();
-const processedEventIds = new Set();
-
 function setupSse(publicPlayerId) {
   closeSse();
 
@@ -323,16 +318,20 @@ async function syncMissedEvents(publicPlayerId) {
 }
 
 function closeSse() {
-  if (state.eventSource) {
-    state.eventSource.close();
-    state.eventSource = null;
+  try {
+    if (state && state.eventSource) {
+      state.eventSource.close();
+      state.eventSource = null;
+    }
+    if (typeof syncMissedEventsTimer !== 'undefined' && syncMissedEventsTimer) {
+      clearInterval(syncMissedEventsTimer);
+      syncMissedEventsTimer = null;
+    }
+    state.sseStatus = 'disconnected';
+    updateSseIndicator();
+  } catch (err) {
+    console.warn('closeSse warning:', err);
   }
-  if (syncMissedEventsTimer) {
-    clearInterval(syncMissedEventsTimer);
-    syncMissedEventsTimer = null;
-  }
-  state.sseStatus = 'disconnected';
-  updateSseIndicator();
 }
 
 function updateSseIndicator() {
@@ -1331,4 +1330,11 @@ function formatDate(timestamp) {
   if (!timestamp) return '';
   const d = new Date(timestamp);
   return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
+// Launch application once all components, routes, and listeners are fully initialized
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', startApp);
+} else {
+  startApp();
 }

@@ -29,7 +29,7 @@ export class Router {
       paramNames.push(name);
       return '([^/]+)';
     });
-    const regex = new RegExp(`^${regexPath}$`);
+    const regex = new RegExp(`^${regexPath}/?$`);
 
     this.routes.push({
       method: method.toUpperCase(),
