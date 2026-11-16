@@ -143,6 +143,19 @@ export async function app(req, res) {
     // Ensure DB is initialized
     await ensureDbReady();
 
+    // Vercel rewrite restoration guard: restore original route if received as /api/index.js
+    if (req.url && (req.url.startsWith('/api/index.js') || req.url.startsWith('/api/index'))) {
+      try {
+        const parsed = new URL(req.url, `http://${req.headers?.host || 'localhost'}`);
+        const targetPath = parsed.searchParams.get('__path') || req.headers?.['x-matched-path'] || req.headers?.['x-forwarded-uri'] || req.headers?.['x-invoke-path'];
+        if (targetPath && typeof targetPath === 'string') {
+          parsed.searchParams.delete('__path');
+          const cleanTarget = targetPath.startsWith('/') ? targetPath : '/' + targetPath;
+          req.url = `${cleanTarget}${parsed.search}`;
+        }
+      } catch (_) {}
+    }
+
     // 1. Attempt API Router match first
     const handled = await router.handle(req, res);
     if (handled || res.headersSent || res.writableEnded) {

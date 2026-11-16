@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert';
 import crypto from 'node:crypto';
+import { EventEmitter } from 'node:events';
 import { createTestRouter, generateHmacHeaders, dispatch } from './testHelper.js';
 import { config, validateProductionConfig } from '../server/config.js';
 import { queryOne } from '../server/db/index.js';
@@ -369,6 +370,53 @@ test('Acrone Points V2 & Vercel Production Readiness Suite', async (t) => {
     assert.strictEqual(typeof serverModule.app, 'function');
     assert.strictEqual(typeof serverModule.createServer, 'function');
     assert.strictEqual(typeof apiModule.default, 'function');
+
+    // Helper to simulate request through api/index.js
+    const simulateApiRequest = (url, headers = {}) => {
+      return new Promise((resolve) => {
+        const req = new EventEmitter();
+        req.url = url;
+        req.method = 'GET';
+        req.headers = { host: 'localhost:3000', ...headers };
+        setTimeout(() => req.emit('end'), 5);
+
+        const res = new EventEmitter();
+        let statusCode = 200;
+        let body = '';
+        res.setHeader = () => {};
+        res.getHeader = () => null;
+        res.writeHead = (code) => { statusCode = code; };
+        res.status = (code) => { statusCode = code; return res; };
+        res.json = (data) => resolve({ statusCode, data });
+        res.end = (chunk) => {
+          if (chunk) body += chunk;
+          try { resolve({ statusCode, data: JSON.parse(body) }); }
+          catch (_) { resolve({ statusCode, data: body }); }
+        };
+
+        apiModule.default(req, res);
+      });
+    };
+
+    // Verify Vercel rewrite with __path restores /api/v1/bot/health
+    const resPath = await simulateApiRequest('/api/index.js?__path=/api/v1/bot/health');
+    assert.strictEqual(resPath.statusCode, 200);
+    assert.strictEqual(resPath.data.status, 'healthy');
+
+    // Verify Vercel rewrite preserves original query parameters
+    const resQuery = await simulateApiRequest('/api/index.js?__path=/api/public/search&query=Collector');
+    assert.strictEqual(resQuery.statusCode, 200);
+    assert.strictEqual(resQuery.data.query, 'Collector');
+
+    // Verify Vercel rewrite via x-matched-path header
+    const resHeader = await simulateApiRequest('/api/index.js', { 'x-matched-path': '/api/v1/bot/health' });
+    assert.strictEqual(resHeader.statusCode, 200);
+    assert.strictEqual(resHeader.data.status, 'healthy');
+
+    // Verify direct invocation
+    const resDirect = await simulateApiRequest('/api/v1/bot/health');
+    assert.strictEqual(resDirect.statusCode, 200);
+    assert.strictEqual(resDirect.data.status, 'healthy');
   });
 
   // 10. Two-Phase Sale Edge Cases: Expiry & Insufficient Quantity
