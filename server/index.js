@@ -1,6 +1,7 @@
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { config, validateProductionConfig } from './config.js';
 import { ensureDbReady, closeDb } from './db/index.js';
@@ -103,6 +104,28 @@ const MIME_TYPES = {
   '.woff2': 'font/woff2'
 };
 
+function sendStatic(req, res, filePath, contentType, cacheControl = 'public, max-age=86400') {
+  if (res.headersSent || res.writableEnded) return;
+
+  const acceptEncoding = (req.headers && req.headers['accept-encoding']) || '';
+  const isCompressible = /^(text\/|application\/javascript|application\/json|image\/svg\+xml)/.test(contentType);
+  const useGzip = isCompressible && /\bgzip\b/.test(acceptEncoding);
+
+  const headers = {
+    'Content-Type': contentType,
+    'Cache-Control': cacheControl
+  };
+
+  if (useGzip) {
+    headers['Content-Encoding'] = 'gzip';
+    res.writeHead(200, headers);
+    fs.createReadStream(filePath).pipe(zlib.createGzip({ level: 6 })).pipe(res);
+  } else {
+    res.writeHead(200, headers);
+    fs.createReadStream(filePath).pipe(res);
+  }
+}
+
 /**
  * Universal request handler function.
  * Used both in standalone Node.js server and Vercel Serverless Function entrypoint.
@@ -129,13 +152,8 @@ export async function app(req, res) {
     if (filePath.startsWith(publicDir) && fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
       const ext = path.extname(filePath).toLowerCase();
       const contentType = MIME_TYPES[ext] || 'application/octet-stream';
-      if (!res.headersSent && !res.writableEnded) {
-        res.writeHead(200, {
-          'Content-Type': contentType,
-          'Cache-Control': ext === '.svg' ? 'public, max-age=86400' : 'no-cache, no-store, must-revalidate'
-        });
-        fs.createReadStream(filePath).pipe(res);
-      }
+      const cacheControl = ext === '.html' ? 'no-cache' : 'public, max-age=86400';
+      sendStatic(req, res, filePath, contentType, cacheControl);
       return;
     }
 
@@ -143,10 +161,7 @@ export async function app(req, res) {
     if (pathname === '/' || pathname.startsWith('/u/')) {
       const indexPath = path.join(publicDir, 'index.html');
       if (fs.existsSync(indexPath)) {
-        if (!res.headersSent && !res.writableEnded) {
-          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-          fs.createReadStream(indexPath).pipe(res);
-        }
+        sendStatic(req, res, indexPath, 'text/html; charset=utf-8', 'no-cache');
         return;
       }
     }

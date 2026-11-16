@@ -3,31 +3,81 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ACRONE Collection — Public Companion to Goti</title>
+  <title>Collection — Public Companion to Goti</title>
   <meta name="description" content="Explore public player inventories, rare fish catches, mined minerals, and mystery chest discoveries earned in YouTube stream chat.">
 
   <!-- Open Graph & Social Preview -->
   <meta property="og:type" content="website">
-  <meta property="og:title" content="ACRONE Collection — Stream Gaming Inventory Explorer">
+  <meta property="og:title" content="Collection — Stream Gaming Inventory Explorer">
   <meta property="og:description" content="Discover rare fish, deep-earth minerals, and ancient chest artifacts collected by stream viewers.">
   <meta property="og:image" content="/assets/badges/kraken_conqueror.svg">
-  <meta property="og:site_name" content="ACRONE Collection">
+  <meta property="og:site_name" content="Collection">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="theme-color" content="#D83C53">
 
-  <!-- Fonts: Inter & Rajdhani -->
+  <!-- Preconnect to Font Servers for rapid handshake -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Rajdhani:wght@600;700;800&display=swap" rel="stylesheet">
 
-  <!-- Stylesheet -->
-  <link rel="stylesheet" href="/css/app.css?v=1.5">
+  <!-- Non-blocking asynchronous font delivery to eliminate LCP delay -->
+  <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Rajdhani:wght@600;700;800&display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Rajdhani:wght@600;700;800&display=swap" media="print" onload="this.media='all'">
+  <noscript>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Rajdhani:wght@600;700;800&display=swap">
+  </noscript>
+
+  <!-- Preload & Link Stylesheet -->
+  <link rel="preload" as="style" href="/css/app.css?v=1.6">
+  <link rel="stylesheet" href="/css/app.css?v=1.6">
   <link rel="icon" type="image/svg+xml" href="/assets/badges/first_catch.svg">
 </head>
 <body>
-  <div id="app"></div>
+  <div id="app">
+    <!-- Instant Pre-rendered Shell for Sub-Second First Contentful Paint & LCP -->
+    <header class="site-header">
+      <div class="container header-inner">
+        <a href="/" class="brand-logo" onclick="event.preventDefault(); navigate('/');">
+          <div class="brand-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#FFF" stroke-width="2.5"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+          </div>
+          <div><span class="brand-text-accent">COLLECTION</span></div>
+        </a>
+      </div>
+    </header>
 
-  <!-- Client Application -->
-  <script src="/js/app.js?v=1.5"></script>
+    <main class="container page-main">
+      <div class="home-hero">
+        <h1>EVERY CATCH. EVERY GEM.<br><span style="color: var(--accent-crimson);">PUBLIC SHOWCASE.</span></h1>
+        <p>The companion collection viewer for Goti. Play Fishing, Mining, and Mystery Chests during YouTube livestreams and explore your inventory anytime.</p>
+        
+        <form id="home-search-form" class="home-search-bar" onsubmit="event.preventDefault(); submitHomeSearch();">
+          <input type="text" id="home-search-input" class="home-search-input" placeholder="Enter your YouTube username or Collection ID (usr_...)..." required />
+          <button type="submit" class="home-search-btn">EXPLORE</button>
+        </form>
+      </div>
+
+      <div style="background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); padding: 32px; margin: 24px 0 32px;">
+        <h3 style="font-size: 1.35rem; margin-bottom: 12px; color: var(--text-main);">How Collection Works</h3>
+        <p style="color: var(--text-secondary); font-size: 0.95rem; line-height: 1.6; margin-bottom: 20px;">
+          Viewers participate in chat mini-games during the stream. Type <code>!fish</code>, <code>!mine</code>, or <code>!chest</code> to discover collectibles.
+          To get your personal public collection link in YouTube chat, simply type:
+        </p>
+        <div style="background: var(--bg-deep); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 12px 18px; font-family: monospace; color: var(--accent-crimson); font-size: 1.1rem; display: inline-block;">
+          !collection
+        </div>
+        <p style="color: var(--text-muted); font-size: 0.85rem; margin-top: 14px;">
+          Note: This website is completely read-only and requires zero sign-up. Item sales are executed safely through chat commands handled by Goti.
+        </p>
+      </div>
+    </main>
+
+    <!-- Watermark Footer -->
+    <footer class="site-watermark">
+      <span>made with <span class="heart-icon">❤️</span> by <strong>acrone</strong></span>
+    </footer>
+  </div>
+
+  <!-- Client Application with Defer -->
+  <script src="/js/app.js?v=1.6" defer></script>
 </body>
 </html>

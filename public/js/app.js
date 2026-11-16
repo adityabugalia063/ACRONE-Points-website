@@ -25,12 +25,18 @@ const state = {
   toastTimeout: null
 };
 
-// Initialize App on DOM Ready
-document.addEventListener('DOMContentLoaded', () => {
+// Initialize App immediately if DOM is ready, or on DOMContentLoaded
+function startApp() {
   initRouter();
   window.addEventListener('popstate', handlePopState);
   document.body.addEventListener('click', handleLinkClick);
-});
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', startApp);
+} else {
+  startApp();
+}
 
 /* ==========================================================================
    ROUTING
@@ -38,6 +44,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
 function initRouter() {
   const path = window.location.pathname;
+  if (path === '/' || path === '') {
+    state.publicPlayerId = null;
+    closeSse();
+    const searchForm = document.getElementById('home-search-form');
+    if (!searchForm) {
+      renderHomePage();
+    }
+    return;
+  }
   navigate(path, false);
 }
 
@@ -382,7 +397,7 @@ function renderHomePage() {
           <div class="brand-icon">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#FFF" stroke-width="2.5"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
           </div>
-          <div><span>ACRONE </span><span class="brand-text-accent">COLLECTION</span></div>
+          <div><span class="brand-text-accent">COLLECTION</span></div>
         </a>
       </div>
     </header>
@@ -399,7 +414,7 @@ function renderHomePage() {
       </div>
 
       <div style="background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); padding: 32px; margin: 24px 0 32px;">
-        <h3 style="font-size: 1.35rem; margin-bottom: 12px; color: var(--text-main);">How Acrone Collection Works</h3>
+        <h3 style="font-size: 1.35rem; margin-bottom: 12px; color: var(--text-main);">How Collection Works</h3>
         <p style="color: var(--text-secondary); font-size: 0.95rem; line-height: 1.6; margin-bottom: 20px;">
           Viewers participate in chat mini-games during the stream. Type <code>!fish</code>, <code>!mine</code>, or <code>!chest</code> to discover collectibles.
           To get your personal public collection link in YouTube chat, simply type:
@@ -469,7 +484,7 @@ function renderProfileShell() {
           <div class="brand-icon">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#FFF" stroke-width="2.5"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
           </div>
-          <div><span>ACRONE </span><span class="brand-text-accent">COLLECTION</span></div>
+          <div><span class="brand-text-accent">COLLECTION</span></div>
         </a>
 
         <div class="header-status-badge" id="sse-indicator">
@@ -997,7 +1012,7 @@ function renderProfileNotFound(attemptedId) {
           <div class="brand-icon">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#FFF" stroke-width="2.5"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
           </div>
-          <div><span>ACRONE </span><span class="brand-text-accent">COLLECTION</span></div>
+          <div><span class="brand-text-accent">COLLECTION</span></div>
         </a>
       </div>
     </header>
@@ -1083,7 +1098,7 @@ function renderServerError(attemptedId, message) {
           <div class="brand-icon">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#FFF" stroke-width="2.5"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
           </div>
-          <div><span>ACRONE </span><span class="brand-text-accent">COLLECTION</span></div>
+          <div><span class="brand-text-accent">COLLECTION</span></div>
         </a>
       </div>
     </header>
@@ -1138,7 +1153,7 @@ function renderNetworkError(attemptedId, message) {
           <div class="brand-icon">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#FFF" stroke-width="2.5"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
           </div>
-          <div><span>ACRONE </span><span class="brand-text-accent">COLLECTION</span></div>
+          <div><span class="brand-text-accent">COLLECTION</span></div>
         </a>
       </div>
     </header>
