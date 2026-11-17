@@ -28,6 +28,7 @@ export function registerPublicRoutes(router) {
           displayName: player.displayName,
           avatarUrl: player.avatarUrl,
           titleBadge: 'Collector',
+          balance: Number(player.balance || 0),
           createdAt: player.createdAt,
           lastSeenAt: player.lastSeenAt
         },

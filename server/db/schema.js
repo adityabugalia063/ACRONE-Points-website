@@ -11,6 +11,9 @@ export const SCHEMA_STATEMENTS = [
     public_player_id TEXT NOT NULL UNIQUE,
     display_name TEXT NOT NULL,
     avatar_url TEXT,
+    balance INTEGER NOT NULL DEFAULT 0,
+    balance_revision INTEGER NOT NULL DEFAULT 0,
+    balance_updated_at INTEGER,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
     last_seen_at INTEGER NOT NULL
@@ -119,5 +122,24 @@ export const SCHEMA_STATEMENTS = [
 export async function initSchema(client) {
   for (const statement of SCHEMA_STATEMENTS) {
     await client.execute(statement);
+  }
+
+  // Idempotent column migrations for player balance support
+  const balanceMigrations = [
+    'ALTER TABLE players ADD COLUMN balance INTEGER NOT NULL DEFAULT 0;',
+    'ALTER TABLE players ADD COLUMN balance_revision INTEGER NOT NULL DEFAULT 0;',
+    'ALTER TABLE players ADD COLUMN balance_updated_at INTEGER;'
+  ];
+
+  for (const migration of balanceMigrations) {
+    try {
+      await client.execute(migration);
+    } catch (err) {
+      // Ignore if column already exists
+      const msg = err?.message || '';
+      if (!/duplicate column|already exists/i.test(msg)) {
+        // If it's another error, keep moving safely
+      }
+    }
   }
 }

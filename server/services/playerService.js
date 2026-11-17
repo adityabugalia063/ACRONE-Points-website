@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { queryOne, queryAll, execute } from '../db/index.js';
 import { config } from '../config.js';
+import { sseService } from './sseService.js';
 
 export class PlayerService {
   /**
@@ -64,7 +65,7 @@ export class PlayerService {
     if (!publicPlayerId || typeof publicPlayerId !== 'string') return null;
     const clean = publicPlayerId.trim();
     const player = await queryOne(
-      `SELECT id, youtube_channel_id, public_player_id, display_name, avatar_url, created_at, updated_at, last_seen_at
+      `SELECT id, youtube_channel_id, public_player_id, display_name, avatar_url, balance, balance_revision, balance_updated_at, created_at, updated_at, last_seen_at
        FROM players 
        WHERE LOWER(public_player_id) = LOWER(?) OR LOWER(display_name) = LOWER(?)`,
       [clean, clean]
@@ -77,6 +78,9 @@ export class PlayerService {
       publicPlayerId: player.public_player_id,
       displayName: player.display_name,
       avatarUrl: player.avatar_url,
+      balance: Number(player.balance || 0),
+      balanceRevision: Number(player.balance_revision || 0),
+      balanceUpdatedAt: player.balance_updated_at,
       createdAt: player.created_at,
       updatedAt: player.updated_at,
       lastSeenAt: player.last_seen_at
@@ -274,12 +278,98 @@ export class PlayerService {
         publicPlayerId: player.public_player_id,
         displayName: player.display_name,
         avatarUrl: player.avatar_url,
+        balance: Number(player.balance || 0),
+        balanceRevision: Number(player.balance_revision || 0),
         createdAt: player.created_at,
         lastSeenAt: player.last_seen_at
       },
       stats,
       inventory,
       achievements
+    };
+  }
+
+  /**
+   * Synchronizes player balance snapshot from local Streamer.bot points ledger.
+   * Enforces monotonic revisions and broadcasts updates via SSE.
+   */
+  static async syncPlayerBalance({ youtubeChannelId, balance, revision, eventId }) {
+    if (!youtubeChannelId || typeof youtubeChannelId !== 'string') {
+      const err = new Error('youtubeChannelId is required');
+      err.code = 'BAD_REQUEST';
+      throw err;
+    }
+
+    const numBalance = Number(balance);
+    if (!Number.isFinite(numBalance) || numBalance < 0 || !Number.isInteger(numBalance)) {
+      const err = new Error('balance must be a non-negative integer');
+      err.code = 'INVALID_BALANCE';
+      throw err;
+    }
+
+    const numRevision = Number(revision ?? 0);
+    if (!Number.isFinite(numRevision) || numRevision < 0 || !Number.isInteger(numRevision)) {
+      const err = new Error('revision must be a non-negative integer');
+      err.code = 'INVALID_REVISION';
+      throw err;
+    }
+
+    const now = Date.now();
+
+    // Look up or auto-register player
+    let player = await queryOne(
+      'SELECT id, public_player_id, balance, balance_revision FROM players WHERE youtube_channel_id = ?',
+      [youtubeChannelId]
+    );
+
+    if (!player) {
+      const upserted = await this.upsertPlayer({
+        youtubeChannelId,
+        displayName: 'Collector'
+      });
+      player = await queryOne(
+        'SELECT id, public_player_id, balance, balance_revision FROM players WHERE id = ?',
+        [upserted.id]
+      );
+    }
+
+    const currentRevision = Number(player.balance_revision || 0);
+    const currentBalance = Number(player.balance || 0);
+
+    // Reject stale revisions: older balance revisions cannot overwrite newer balances
+    if (numRevision < currentRevision) {
+      return {
+        success: true,
+        stale: true,
+        message: 'Stale revision ignored',
+        balance: currentBalance,
+        revision: currentRevision,
+        publicPlayerId: player.public_player_id
+      };
+    }
+
+    // Update player balance and revision
+    await execute(
+      `UPDATE players
+       SET balance = ?, balance_revision = ?, balance_updated_at = ?, updated_at = ?
+       WHERE id = ?`,
+      [numBalance, numRevision, now, now, player.id]
+    );
+
+    // Broadcast SSE update to public profile in real-time
+    try {
+      sseService.broadcastToPlayer(player.public_player_id, 'balance_updated', {
+        balance: numBalance,
+        revision: numRevision,
+        updatedAt: now
+      });
+    } catch (_) {}
+
+    return {
+      success: true,
+      balance: numBalance,
+      revision: numRevision,
+      publicPlayerId: player.public_player_id
     };
   }
 }

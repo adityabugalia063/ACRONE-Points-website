@@ -75,6 +75,42 @@ export function registerBotRoutes(router) {
     }
   });
 
+  // 2b. Player Balance Synchronization (Authoritative Desktop Bot Ledger -> Website Public Mirror)
+  router.post('/api/v1/bot/players/balance/sync', botRateLimiter, verifyBotAuth, async (req, res) => {
+    try {
+      const { youtubeChannelId, balance, revision, eventId } = req.body || {};
+
+      if (!youtubeChannelId || typeof youtubeChannelId !== 'string') {
+        return res.status(400).json({
+          error: 'BAD_REQUEST',
+          message: 'youtubeChannelId is required'
+        });
+      }
+
+      if (balance === undefined || balance === null) {
+        return res.status(400).json({
+          error: 'BAD_REQUEST',
+          message: 'balance is required'
+        });
+      }
+
+      const result = await PlayerService.syncPlayerBalance({
+        youtubeChannelId,
+        balance,
+        revision: revision || 0,
+        eventId
+      });
+
+      return res.status(200).json(result);
+    } catch (err) {
+      const status = (err.code === 'BAD_REQUEST' || err.code === 'INVALID_BALANCE' || err.code === 'INVALID_REVISION') ? 400 : 500;
+      return res.status(status).json({
+        error: err.code || 'BALANCE_SYNC_FAILED',
+        message: err.message
+      });
+    }
+  });
+
   // 3. Catalogue Ingestion / Read
   router.get('/api/v1/bot/catalog', botRateLimiter, verifyBotAuth, async (req, res) => {
     try {

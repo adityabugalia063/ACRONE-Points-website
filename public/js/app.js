@@ -230,6 +230,21 @@ function setupSse(publicPlayerId) {
     }
   });
 
+  state.eventSource.addEventListener('balance_updated', (e) => {
+    try {
+      const data = JSON.parse(e.data);
+      if (data && typeof data.balance === 'number') {
+        if (state.player) state.player.balance = data.balance;
+        const heroEl = document.getElementById('hero-balance-val');
+        if (heroEl) heroEl.textContent = data.balance.toLocaleString();
+        const statEl = document.getElementById('stats-balance-val');
+        if (statEl) statEl.textContent = data.balance.toLocaleString();
+      }
+    } catch (err) {
+      console.error('SSE Error parsing balance_updated:', err);
+    }
+  });
+
   state.eventSource.addEventListener('achievement_unlocked', (e) => {
     try {
       const ach = JSON.parse(e.data);
@@ -565,6 +580,10 @@ function renderProfileShell() {
         </div>
 
         <div class="profile-actions">
+          <div class="profile-balance-widget">
+            <span class="balance-badge-label">BALANCE</span>
+            <span class="balance-badge-val" id="hero-balance-val">${Number(player.balance || 0).toLocaleString()}</span>
+          </div>
           <button class="btn-action" onclick="copyProfileLink()">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
             <span id="copy-btn-text">Share Profile</span>
@@ -623,6 +642,18 @@ function updateStatsDom() {
   const { totalQuantity, uniqueItemTypes, overallCompletionPercentage, categories } = state.stats;
 
   container.innerHTML = `
+    <!-- Public Player Balance -->
+    <div class="stat-card balance-stat-card">
+      <div class="stat-header">
+        <span class="stat-label">BALANCE</span>
+        <span class="stat-icon">🪙</span>
+      </div>
+      <div class="stat-value" id="stats-balance-val">${Number(state.player?.balance || 0).toLocaleString()}</div>
+      <div class="stat-subtext">
+        <span>Verified Public Balance</span>
+      </div>
+    </div>
+
     <!-- Total Unique Item Types -->
     <div class="stat-card">
       <div class="stat-header">

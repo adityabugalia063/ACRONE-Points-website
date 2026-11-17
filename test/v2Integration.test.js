@@ -439,4 +439,96 @@ test('Acrone Points V2 & Vercel Production Readiness Suite', async (t) => {
     assert.strictEqual(res.status, 400);
     assert.strictEqual(res.json.error, 'INSUFFICIENT_QUANTITY');
   });
+
+  // 11. Public Balance Synchronization & Monotonic Revision Guard
+  await t.test('POST /api/v1/bot/players/balance/sync updates balance and enforces monotonic revisions', async () => {
+    const syncChannel = 'UC_balance_test_' + crypto.randomUUID().substring(0, 8);
+
+    // Initial upsert of player
+    const upsertRes = await dispatch(router, {
+      method: 'POST',
+      url: '/api/v1/bot/players/upsert',
+      headers: generateHmacHeaders({ youtubeChannelId: syncChannel, displayName: 'BalanceTester' }),
+      body: { youtubeChannelId: syncChannel, displayName: 'BalanceTester' }
+    });
+    assert.strictEqual(upsertRes.status, 200);
+    const pubId = upsertRes.json.player.publicPlayerId;
+
+    // Check initial public profile balance is 0
+    const prof0 = await dispatch(router, {
+      method: 'GET',
+      url: `/api/public/players/${pubId}`
+    });
+    assert.strictEqual(prof0.status, 200);
+    assert.strictEqual(prof0.json.player.balance, 0);
+
+    // Sync balance: 50,000 AP at revision 1
+    const sync1 = {
+      youtubeChannelId: syncChannel,
+      balance: 50000,
+      revision: 1,
+      eventId: 'evt_bal_1_' + crypto.randomUUID()
+    };
+    const resSync1 = await dispatch(router, {
+      method: 'POST',
+      url: '/api/v1/bot/players/balance/sync',
+      headers: generateHmacHeaders(sync1),
+      body: sync1
+    });
+    assert.strictEqual(resSync1.status, 200);
+    assert.strictEqual(resSync1.json.success, true);
+    assert.strictEqual(resSync1.json.balance, 50000);
+    assert.strictEqual(resSync1.json.revision, 1);
+
+    // Verify public profile returns updated balance
+    const prof1 = await dispatch(router, {
+      method: 'GET',
+      url: `/api/public/players/${pubId}`
+    });
+    assert.strictEqual(prof1.status, 200);
+    assert.strictEqual(prof1.json.player.balance, 50000);
+
+    // Sync newer balance: 75,000 AP at revision 2
+    const sync2 = {
+      youtubeChannelId: syncChannel,
+      balance: 75000,
+      revision: 2,
+      eventId: 'evt_bal_2_' + crypto.randomUUID()
+    };
+    const resSync2 = await dispatch(router, {
+      method: 'POST',
+      url: '/api/v1/bot/players/balance/sync',
+      headers: generateHmacHeaders(sync2),
+      body: sync2
+    });
+    assert.strictEqual(resSync2.status, 200);
+    assert.strictEqual(resSync2.json.balance, 75000);
+    assert.strictEqual(resSync2.json.revision, 2);
+
+    // Attempt stale sync: older revision 1 trying to overwrite revision 2
+    const staleSync = {
+      youtubeChannelId: syncChannel,
+      balance: 10000,
+      revision: 1,
+      eventId: 'evt_stale_' + crypto.randomUUID()
+    };
+    const resStale = await dispatch(router, {
+      method: 'POST',
+      url: '/api/v1/bot/players/balance/sync',
+      headers: generateHmacHeaders(staleSync),
+      body: staleSync
+    });
+    assert.strictEqual(resStale.status, 200);
+    assert.strictEqual(resStale.json.stale, true);
+    assert.strictEqual(resStale.json.balance, 75000, 'Balance must remain 75000 from revision 2');
+    assert.strictEqual(resStale.json.revision, 2);
+
+    // Re-verify public profile still displays 75000
+    const profFinal = await dispatch(router, {
+      method: 'GET',
+      url: `/api/public/players/${pubId}`
+    });
+    assert.strictEqual(profFinal.status, 200);
+    assert.strictEqual(profFinal.json.player.balance, 75000);
+  });
 });
