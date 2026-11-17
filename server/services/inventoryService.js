@@ -25,6 +25,13 @@ export class InventoryService {
     const parsedQty = parseInt(quantity, 10);
     if (isNaN(parsedQty) || parsedQty <= 0) throw new Error('quantity must be a positive integer');
 
+    let cleanSource = (source || 'fishing').toLowerCase().trim();
+    if (cleanSource === 'fish') cleanSource = 'fishing';
+    if (cleanSource === 'mine') cleanSource = 'mining';
+    if (!['fishing', 'mining', 'chest', 'admin', 'sale'].includes(cleanSource)) {
+      cleanSource = 'fishing';
+    }
+
     const eventTime = occurredAt ? parseInt(occurredAt, 10) : Date.now();
     const now = Date.now();
 
@@ -113,7 +120,7 @@ export class InventoryService {
     await execute(
       `INSERT INTO collection_events (id, player_id, item_id, event_type, quantity_delta, source, reference_id, occurred_at, received_at)
        VALUES (?, ?, ?, 'found', ?, ?, ?, ?, ?)`,
-      [eventId, player.id, itemId, parsedQty, source, referenceId || null, eventTime, now]
+      [eventId, player.id, itemId, parsedQty, cleanSource, referenceId || null, eventTime, now]
     );
 
     // 6. Evaluate Achievements

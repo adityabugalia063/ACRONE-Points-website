@@ -203,12 +203,19 @@ export function registerBotRoutes(router) {
         });
       }
 
+      let cleanSource = (source || 'fishing').toLowerCase().trim();
+      if (cleanSource === 'fish') cleanSource = 'fishing';
+      if (cleanSource === 'mine') cleanSource = 'mining';
+      if (!['fishing', 'mining', 'chest', 'admin', 'sale'].includes(cleanSource)) {
+        cleanSource = 'fishing';
+      }
+
       const result = await InventoryService.recordCollectionEvent({
         eventId,
         youtubeChannelId,
         itemId,
         quantity: parseInt(quantity || 1, 10),
-        source: source || 'fishing',
+        source: cleanSource,
         referenceId,
         occurredAt
       });
