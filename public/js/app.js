@@ -22,13 +22,19 @@ const state = {
   sseStatus: 'disconnected', // 'connected', 'reconnecting', 'disconnected'
   eventSource: null,
   selectedItem: null,
-  toastTimeout: null
+  toastTimeout: null,
+  syncMissedEventsTimer: null,
+  lastSyncTimestamp: Date.now(),
+  loadingWatchdogTimer: null
 };
 
-// Real-time SSE and Sync State (Top-level declarations to prevent TDZ ReferenceErrors)
-let syncMissedEventsTimer = null;
-let lastSyncTimestamp = Date.now();
-const processedEventIds = new Set();
+// Global variables initialized safely to avoid Temporal Dead Zone (TDZ)
+window.syncMissedEventsTimer = null;
+window.lastSyncTimestamp = Date.now();
+window.processedEventIds = new Set();
+var syncMissedEventsTimer = null;
+var lastSyncTimestamp = Date.now();
+var processedEventIds = window.processedEventIds;
 
 // Initialize App
 function startApp() {
@@ -169,6 +175,7 @@ function submitHomeSearch() {
       return res.json();
     })
     .then((data) => {
+      resetButton();
       if (data.results && data.results.length > 0) {
         // Find exact match first (case-insensitive)
         const exactMatch = data.results.find(
@@ -273,11 +280,14 @@ function setupSse(publicPlayerId) {
   };
 
   // Periodic fallback synchronization for multi-instance serverless resilience
-  syncMissedEventsTimer = setInterval(() => {
+  if (state.syncMissedEventsTimer) clearInterval(state.syncMissedEventsTimer);
+  state.syncMissedEventsTimer = setInterval(() => {
     if (state.publicPlayerId === publicPlayerId && !document.hidden) {
       syncMissedEvents(publicPlayerId);
     }
   }, 8000);
+  window.syncMissedEventsTimer = state.syncMissedEventsTimer;
+  syncMissedEventsTimer = state.syncMissedEventsTimer;
 }
 
 function handleInventoryUpdateEvent(publicPlayerId, data) {
@@ -338,12 +348,24 @@ function closeSse() {
       state.eventSource.close();
       state.eventSource = null;
     }
-    if (typeof syncMissedEventsTimer !== 'undefined' && syncMissedEventsTimer) {
-      clearInterval(syncMissedEventsTimer);
-      syncMissedEventsTimer = null;
+  } catch (_) {}
+
+  try {
+    if (state && state.syncMissedEventsTimer) {
+      clearInterval(state.syncMissedEventsTimer);
+      state.syncMissedEventsTimer = null;
     }
-    state.sseStatus = 'disconnected';
-    updateSseIndicator();
+    if (window.syncMissedEventsTimer) {
+      clearInterval(window.syncMissedEventsTimer);
+      window.syncMissedEventsTimer = null;
+    }
+  } catch (_) {}
+
+  try {
+    if (state) {
+      state.sseStatus = 'disconnected';
+      updateSseIndicator();
+    }
   } catch (err) {
     console.warn('closeSse warning:', err);
   }
@@ -397,20 +419,44 @@ function showToast(title, message, color = '#D83C53') {
 
 async function loadPlayerProfile(publicPlayerId, showLoading = true) {
   const appEl = document.getElementById('app');
+  if (!appEl) return;
+
+  // Clear any existing watchdog timer
+  if (state.loadingWatchdogTimer) {
+    clearTimeout(state.loadingWatchdogTimer);
+    state.loadingWatchdogTimer = null;
+  }
+
   if (showLoading) {
     appEl.innerHTML = renderLoadingState('Loading Collection...');
   }
 
+  // Safety watchdog: prevent infinite spinner if network request hangs
+  state.loadingWatchdogTimer = setTimeout(() => {
+    try {
+      const loader = document.querySelector('.profile-loader-screen, .catalog-loader');
+      if (loader) {
+        renderNetworkError(publicPlayerId, 'The server took too long to respond. Please check your connection or try again.');
+      }
+    } catch (_) {}
+  }, 12000);
+
   try {
     const res = await fetch(`/api/public/players/${encodeURIComponent(publicPlayerId)}`);
+
+    if (state.loadingWatchdogTimer) {
+      clearTimeout(state.loadingWatchdogTimer);
+      state.loadingWatchdogTimer = null;
+    }
+
     if (res.status === 404) {
-      closeSse();
+      try { closeSse(); } catch (_) {}
       renderProfileNotFound(publicPlayerId);
       return;
     }
 
     if (res.status >= 500 || !res.ok) {
-      closeSse();
+      try { closeSse(); } catch (_) {}
       renderServerError(publicPlayerId, 'The collection database is temporarily unavailable. Please try again in a few moments.');
       return;
     }
@@ -424,7 +470,11 @@ async function loadPlayerProfile(publicPlayerId, showLoading = true) {
     loadCurrentTab();
     setupSse(publicPlayerId);
   } catch (err) {
-    closeSse();
+    if (state.loadingWatchdogTimer) {
+      clearTimeout(state.loadingWatchdogTimer);
+      state.loadingWatchdogTimer = null;
+    }
+    try { closeSse(); } catch (_) {}
     renderNetworkError(publicPlayerId, 'Unable to connect to the collection server. Please check your internet connection.');
   }
 }
