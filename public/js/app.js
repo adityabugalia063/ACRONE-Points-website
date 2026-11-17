@@ -419,6 +419,8 @@ async function loadPlayerProfile(publicPlayerId, showLoading = true) {
   }
 
   // 2. Instant Pre-Shell Activation (Keeps <h1> rendered for sub-50ms LCP)
+  document.documentElement.classList.remove('route-home');
+  document.documentElement.classList.add('route-profile');
   const homeView = document.getElementById('home-view');
   if (homeView) homeView.style.display = 'none';
 
@@ -604,6 +606,8 @@ async function loadAchievements(publicPlayerId, showLoading = true) {
    ========================================================================== */
 
 function renderHomePage() {
+  document.documentElement.classList.remove('route-profile');
+  document.documentElement.classList.add('route-home');
   const homeView = document.getElementById('home-view');
   const profileView = document.getElementById('profile-view');
   const sse = document.getElementById('sse-indicator');
@@ -666,6 +670,8 @@ function renderHomePage() {
    ========================================================================== */
 
 function renderProfileShell() {
+  document.documentElement.classList.remove('route-home');
+  document.documentElement.classList.add('route-profile');
   const { player, stats } = state;
   const homeView = document.getElementById('home-view');
   let profileView = document.getElementById('profile-view');

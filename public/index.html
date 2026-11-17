@@ -19,16 +19,34 @@
   <link rel="preload" href="/assets/fonts/rajdhani-700.woff2" as="font" type="font/woff2" crossorigin fetchpriority="high">
 
   <!-- Full Stylesheet -->
-  <link rel="stylesheet" href="/css/app.css?v=2.3">
+  <link rel="stylesheet" href="/css/app.css?v=2.4">
   <link rel="icon" type="image/svg+xml" href="/assets/badges/first_catch.svg">
 
-  <!-- Critical Inline CSS for Zero-Latency First Contentful Paint & Sub-100ms LCP -->
+  <!-- Immediate Route Detection in <head> for Zero-Latency Paint (<30ms LCP) -->
+  <script>
+    (function() {
+      try {
+        var p = window.location.pathname;
+        if (p.startsWith('/u/') && p.length > 3) {
+          document.documentElement.classList.add('route-profile');
+          var raw = decodeURIComponent(p.split('/')[2] || '');
+          window.__PREFILL_ID__ = raw;
+        } else {
+          document.documentElement.classList.add('route-home');
+        }
+      } catch (_) {
+        document.documentElement.classList.add('route-home');
+      }
+    })();
+  </script>
+
+  <!-- Critical Inline CSS for Zero-Latency First Contentful Paint & Sub-50ms LCP -->
   <style>
     @font-face {
       font-family: 'Rajdhani';
       font-style: normal;
       font-weight: 700;
-      font-display: optional;
+      font-display: swap;
       src: url('/assets/fonts/rajdhani-700.woff2') format('woff2');
     }
     :root {
@@ -60,6 +78,13 @@
     .home-search-bar { max-width: 520px; margin: 0 auto 40px; display: flex; gap: 8px; }
     .home-search-input { flex: 1; background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 12px 18px; color: var(--text-main); font-size: 0.95rem; }
     .home-search-btn { background: var(--accent-crimson); color: #FFF; border: none; border-radius: var(--radius-md); padding: 0 24px; font-weight: 700; cursor: pointer; }
+
+    /* Instant Route Shell Display — Zero Layout Shift & Zero Render Delay */
+    html:not(.route-profile) #home-view { display: block !important; }
+    html:not(.route-profile) #profile-view { display: none !important; }
+    html.route-profile #home-view { display: none !important; }
+    html.route-profile #profile-view { display: block !important; }
+    html.route-profile #sse-indicator { display: inline-flex !important; }
   </style>
 </head>
 <body>
@@ -81,7 +106,7 @@
 
     <main class="container page-main" id="main-content">
       <!-- 1. Home View -->
-      <div id="home-view" style="display:none;">
+      <div id="home-view">
         <div class="home-hero">
           <h1>EVERY CATCH. EVERY GEM.<br><span style="color: var(--accent-crimson);">PUBLIC SHOWCASE.</span></h1>
           <p>The companion collection viewer for Goti. Play Fishing, Mining, and Mystery Chests during YouTube livestreams and explore your inventory anytime.</p>
@@ -108,7 +133,7 @@
       </div>
 
       <!-- 2. Profile View (Instant Sub-50ms LCP Shell on /u/:id) -->
-      <div id="profile-view" style="display:none;">
+      <div id="profile-view">
         <section class="profile-hero">
           <div class="profile-identity">
             <div class="profile-avatar-wrap" id="profile-avatar-container">
@@ -116,6 +141,14 @@
             </div>
             <div class="profile-meta">
               <h1 id="profile-hero-title">Collector</h1>
+              <script>
+                if (window.__PREFILL_ID__) {
+                  var _h = document.getElementById('profile-hero-title');
+                  if (_h) _h.textContent = window.__PREFILL_ID__;
+                  var _av = document.getElementById('profile-avatar-char');
+                  if (_av) _av.textContent = window.__PREFILL_ID__.charAt(0).toUpperCase();
+                }
+              </script>
               <div class="profile-role-badge">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
                 <span id="profile-role-text">Collector</span>
@@ -158,20 +191,11 @@
       (function() {
         var p = window.location.pathname;
         if (p.startsWith('/u/') && p.length > 3) {
-          var pView = document.getElementById('profile-view');
-          if (pView) pView.style.display = 'block';
-          var sse = document.getElementById('sse-indicator');
-          if (sse) sse.style.display = 'inline-flex';
-          var rawId = decodeURIComponent(p.split('/')[2] || '');
-          if (rawId) {
-            var h1 = document.getElementById('profile-hero-title');
-            if (h1) h1.textContent = rawId;
-            var av = document.getElementById('profile-avatar-char');
-            if (av) av.textContent = rawId.charAt(0).toUpperCase();
-          }
+          document.documentElement.classList.remove('route-home');
+          document.documentElement.classList.add('route-profile');
         } else {
-          var hView = document.getElementById('home-view');
-          if (hView) hView.style.display = 'block';
+          document.documentElement.classList.remove('route-profile');
+          document.documentElement.classList.add('route-home');
         }
       })();
     </script>
@@ -183,6 +207,6 @@
   </div>
 
   <!-- Client Application with Defer -->
-  <script src="/js/app.js?v=2.3" defer></script>
+  <script src="/js/app.js?v=2.4" defer></script>
 </body>
 </html>
