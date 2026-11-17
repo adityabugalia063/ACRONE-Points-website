@@ -16,11 +16,10 @@
   <meta name="theme-color" content="#D83C53">
 
   <!-- Preload Critical Heading Font for Instant Sub-50ms LCP -->
-  <link rel="preload" href="/assets/fonts/rajdhani-700.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="/assets/fonts/rajdhani-700.woff2" as="font" type="font/woff2" crossorigin fetchpriority="high">
 
-  <!-- Preload & Link Full Stylesheet -->
-  <link rel="preload" as="style" href="/css/app.css?v=2.0">
-  <link rel="stylesheet" href="/css/app.css?v=2.0">
+  <!-- Full Stylesheet -->
+  <link rel="stylesheet" href="/css/app.css?v=2.1">
   <link rel="icon" type="image/svg+xml" href="/assets/badges/first_catch.svg">
 
   <!-- Critical Inline CSS for Zero-Latency First Contentful Paint & Sub-100ms LCP -->
@@ -29,7 +28,7 @@
       font-family: 'Rajdhani';
       font-style: normal;
       font-weight: 700;
-      font-display: swap;
+      font-display: optional;
       src: url('/assets/fonts/rajdhani-700.woff2') format('woff2');
     }
     :root {
@@ -110,6 +109,6 @@
   </div>
 
   <!-- Client Application with Defer -->
-  <script src="/js/app.js?v=2.0" defer></script>
+  <script src="/js/app.js?v=2.1" defer></script>
 </body>
 </html>
