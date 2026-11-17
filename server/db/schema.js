@@ -21,6 +21,7 @@ export const SCHEMA_STATEMENTS = [
 
   `CREATE INDEX IF NOT EXISTS idx_players_public_id ON players(public_player_id);`,
   `CREATE INDEX IF NOT EXISTS idx_players_youtube_id ON players(youtube_channel_id);`,
+  `CREATE INDEX IF NOT EXISTS idx_players_display_name ON players(display_name COLLATE NOCASE);`,
 
   // 2. Rarities Table
   `CREATE TABLE IF NOT EXISTS rarities (
@@ -46,6 +47,7 @@ export const SCHEMA_STATEMENTS = [
   );`,
 
   `CREATE INDEX IF NOT EXISTS idx_catalog_category ON catalog_items(category, active);`,
+  `CREATE INDEX IF NOT EXISTS idx_catalog_active_category ON catalog_items(active, category, sort_order);`,
 
   // 4. Player Inventory Table
   `CREATE TABLE IF NOT EXISTS player_inventory (
@@ -59,6 +61,7 @@ export const SCHEMA_STATEMENTS = [
   );`,
 
   `CREATE INDEX IF NOT EXISTS idx_inventory_player ON player_inventory(player_id);`,
+  `CREATE INDEX IF NOT EXISTS idx_inventory_player_qty ON player_inventory(player_id, quantity);`,
 
   // 5. Collection Events Ledger (Idempotent event store)
   `CREATE TABLE IF NOT EXISTS collection_events (

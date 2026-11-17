@@ -4,12 +4,22 @@ import { AchievementService } from '../services/achievementService.js';
 import { sseService } from '../services/sseService.js';
 import { publicRateLimiter } from '../middleware/rateLimiter.js';
 import { queryAll } from '../db/index.js';
+import { profileResponseCache } from '../services/cacheService.js';
 
 export function registerPublicRoutes(router) {
   // 1. Public Player Profile & Overview Stats
   router.get('/api/public/players/:publicPlayerId', publicRateLimiter, async (req, res) => {
     try {
       const { publicPlayerId } = req.params;
+      const cleanKey = (publicPlayerId || '').toLowerCase().trim();
+
+      const cachedPayload = profileResponseCache.get(cleanKey);
+      if (cachedPayload) {
+        res.setHeader('Cache-Control', 'public, max-age=5, stale-while-revalidate=30');
+        res.setHeader('X-Cache', 'HIT');
+        return res.status(200).json(cachedPayload);
+      }
+
       const player = await PlayerService.getPlayerByPublicId(publicPlayerId);
 
       if (!player) {
@@ -19,10 +29,13 @@ export function registerPublicRoutes(router) {
         });
       }
 
-      const stats = await PlayerService.getPlayerStats(player.id);
-      const recentActivity = await PlayerService.getPlayerRecentActivity(player.id, 8);
+      // Parallelize stats and recent activity queries
+      const [stats, recentActivity] = await Promise.all([
+        PlayerService.getPlayerStats(player.id),
+        PlayerService.getPlayerRecentActivity(player.id, 8)
+      ]);
 
-      return res.status(200).json({
+      const responsePayload = {
         player: {
           publicPlayerId: player.publicPlayerId,
           displayName: player.displayName,
@@ -34,7 +47,19 @@ export function registerPublicRoutes(router) {
         },
         stats,
         recentActivity
-      });
+      };
+
+      profileResponseCache.set(cleanKey, responsePayload);
+      if (player.displayName) {
+        profileResponseCache.set(player.displayName.toLowerCase().trim(), responsePayload);
+      }
+      if (player.publicPlayerId) {
+        profileResponseCache.set(player.publicPlayerId.toLowerCase().trim(), responsePayload);
+      }
+
+      res.setHeader('Cache-Control', 'public, max-age=5, stale-while-revalidate=30');
+      res.setHeader('X-Cache', 'MISS');
+      return res.status(200).json(responsePayload);
     } catch (err) {
       return res.status(500).json({
         error: 'FETCH_PLAYER_FAILED',
@@ -64,6 +89,7 @@ export function registerPublicRoutes(router) {
         });
       }
 
+      res.setHeader('Cache-Control', 'public, max-age=10, stale-while-revalidate=60');
       return res.status(200).json(collection);
     } catch (err) {
       return res.status(500).json({
@@ -87,6 +113,7 @@ export function registerPublicRoutes(router) {
       }
 
       const achievementsData = await AchievementService.getPlayerAchievements(player.id);
+      res.setHeader('Cache-Control', 'public, max-age=10, stale-while-revalidate=60');
       return res.status(200).json(achievementsData);
     } catch (err) {
       return res.status(500).json({
@@ -173,6 +200,7 @@ export function registerPublicRoutes(router) {
   // 6. Active Catalog & Rarities Metadata
   router.get('/api/public/catalog', publicRateLimiter, async (req, res) => {
     try {
+      res.setHeader('Cache-Control', 'public, max-age=300, stale-while-revalidate=3600');
       const rarities = await queryAll(
         'SELECT id, name, display_color, sort_order FROM rarities WHERE active = 1 ORDER BY sort_order ASC'
       );
@@ -199,6 +227,7 @@ export function registerPublicRoutes(router) {
   // 7. Player Search (for Homepage lookup)
   router.get('/api/public/search', publicRateLimiter, async (req, res) => {
     try {
+      res.setHeader('Cache-Control', 'public, max-age=15, stale-while-revalidate=60');
       const query = req.query?.query || req.query?.q || '';
       const results = await PlayerService.searchPlayers(query, 10);
       return res.status(200).json({

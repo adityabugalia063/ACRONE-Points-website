@@ -3,6 +3,7 @@ import { queryOne, queryAll, execute, withTransaction } from '../db/index.js';
 import { PlayerService } from './playerService.js';
 import { AchievementService } from './achievementService.js';
 import { sseService } from './sseService.js';
+import { catalogCache, playerCache } from './cacheService.js';
 
 export class InventoryService {
   /**
@@ -381,10 +382,7 @@ export class InventoryService {
     sortBy = 'rarity'
   }) {
     const cleanId = (publicPlayerId || '').trim();
-    const player = await queryOne(
-      'SELECT id, public_player_id, display_name FROM players WHERE LOWER(public_player_id) = LOWER(?) OR LOWER(display_name) = LOWER(?)',
-      [cleanId, cleanId]
-    );
+    const player = await PlayerService.getPlayerByPublicId(cleanId);
     if (!player) return null;
 
     let query = `
@@ -469,6 +467,10 @@ export class InventoryService {
    * Returns active catalogue items with rarity details and base sale values.
    */
   static async getCatalog(category = null) {
+    const cacheKey = 'cat_' + (category || 'all');
+    const cached = catalogCache.get(cacheKey);
+    if (cached) return cached;
+
     let sql = `
       SELECT ci.id, ci.category, ci.name, ci.rarity_id, ci.description, ci.image_url, ci.base_sale_value, ci.sort_order,
              r.name as rarity_name, r.display_color as rarity_color
@@ -483,7 +485,9 @@ export class InventoryService {
     }
     sql += ' ORDER BY ci.category ASC, ci.sort_order ASC';
 
-    return queryAll(sql, params);
+    const items = await queryAll(sql, params);
+    catalogCache.set(cacheKey, items);
+    return items;
   }
 
   /**
@@ -493,6 +497,8 @@ export class InventoryService {
     if (!Array.isArray(items) || items.length === 0) {
       throw new Error('items array is required');
     }
+
+    catalogCache.clear();
 
     const sqlSync = `
       INSERT INTO catalog_items (id, category, name, rarity_id, description, image_url, active, sort_order, base_sale_value)

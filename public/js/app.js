@@ -25,7 +25,9 @@ const state = {
   toastTimeout: null,
   syncMissedEventsTimer: null,
   lastSyncTimestamp: Date.now(),
-  loadingWatchdogTimer: null
+  loadingWatchdogTimer: null,
+  tabCache: {},
+  profileCache: {}
 };
 
 // Global variables initialized safely to avoid Temporal Dead Zone (TDZ)
@@ -135,7 +137,6 @@ window.navigate = navigate;
 
 function submitHomeSearch() {
   const input = document.getElementById('home-search-input');
-  const btn = document.querySelector('.home-search-btn, #home-search-btn');
   if (!input) return;
 
   let val = input.value.trim();
@@ -149,50 +150,8 @@ function submitHomeSearch() {
     return;
   }
 
-  // Immediate visual feedback on the button
-  if (btn) {
-    btn.disabled = true;
-    btn.innerHTML = `<span class="pulse-dot" style="margin-right: 6px; width: 8px; height: 8px; display: inline-block;"></span> EXPLORING...`;
-  }
-
-  const resetButton = () => {
-    if (btn) {
-      btn.disabled = false;
-      btn.innerHTML = 'EXPLORE';
-    }
-  };
-
-  // If input is directly a publicPlayerId (starts with usr_)
-  if (val.toLowerCase().startsWith('usr_')) {
-    navigate(`/u/${encodeURIComponent(val)}`, true);
-    return;
-  }
-
-  // Lookup via public search endpoint
-  fetch(`/api/public/search?query=${encodeURIComponent(val)}`)
-    .then((res) => {
-      if (!res.ok) throw new Error('Search failed');
-      return res.json();
-    })
-    .then((data) => {
-      resetButton();
-      if (data.results && data.results.length > 0) {
-        // Find exact match first (case-insensitive)
-        const exactMatch = data.results.find(
-          (r) => r.displayName && r.displayName.toLowerCase() === val.toLowerCase()
-        );
-        const targetUrl = exactMatch ? exactMatch.profileUrl : data.results[0].profileUrl;
-        navigate(targetUrl, true);
-      } else {
-        // Unregistered player -> route to dedicated Profile Not Found view
-        navigate(`/u/${encodeURIComponent(val)}`, true);
-      }
-    })
-    .catch(() => {
-      resetButton();
-      // Even if search endpoint encounters an error, route directly to player profile URL
-      navigate(`/u/${encodeURIComponent(val)}`, true);
-    });
+  // Instant navigation: the backend resolves both YouTube usernames and usr_... IDs directly
+  navigate(`/u/${encodeURIComponent(val)}`, true);
 }
 
 window.submitHomeSearch = submitHomeSearch;
@@ -242,7 +201,7 @@ function setupSse(publicPlayerId) {
       const data = JSON.parse(e.data);
       if (data && typeof data.balance === 'number') {
         if (state.player) state.player.balance = data.balance;
-        const heroEl = document.getElementById('hero-balance-val');
+        const heroEl = document.getElementById('profile-hero-balance') || document.getElementById('hero-balance-val');
         if (heroEl) heroEl.textContent = data.balance.toLocaleString();
         const statEl = document.getElementById('stats-balance-val');
         if (statEl) statEl.textContent = data.balance.toLocaleString();
@@ -298,6 +257,10 @@ function handleInventoryUpdateEvent(publicPlayerId, data) {
     : `Removed ${Math.abs(data.delta)} from collection (Remaining: ×${data.newQuantity})`;
 
   showToast(title, msg, data.rarityColor || '#D83C53');
+
+  // Clear tab cache on new collection events so data is refreshed
+  state.tabCache = {};
+  state.profileCache = {};
 
   // Refresh current tab data
   if (state.activeTab === 'overview') {
@@ -418,8 +381,8 @@ function showToast(title, message, color = '#D83C53') {
    ========================================================================== */
 
 async function loadPlayerProfile(publicPlayerId, showLoading = true) {
-  const appEl = document.getElementById('app');
-  if (!appEl) return;
+  const cleanId = (publicPlayerId || '').trim();
+  if (!cleanId) return;
 
   // Clear any existing watchdog timer
   if (state.loadingWatchdogTimer) {
@@ -427,8 +390,61 @@ async function loadPlayerProfile(publicPlayerId, showLoading = true) {
     state.loadingWatchdogTimer = null;
   }
 
-  if (showLoading) {
-    appEl.innerHTML = renderLoadingState('Loading Collection...');
+  // 1. Instant Profile Cache Hit (0ms)
+  const cached = state.profileCache[cleanId.toLowerCase()];
+  if (cached && cached.player) {
+    state.player = cached.player;
+    state.stats = cached.stats;
+    state.recentActivity = cached.recentActivity || [];
+    renderProfileShell();
+    loadCurrentTab();
+    setupSse(cached.player.publicPlayerId || cleanId);
+
+    // Silent background revalidation
+    fetch(`/api/public/players/${encodeURIComponent(cleanId)}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(fresh => {
+        if (fresh && fresh.player) {
+          state.profileCache[cleanId.toLowerCase()] = fresh;
+          if (fresh.player.publicPlayerId) {
+            state.profileCache[fresh.player.publicPlayerId.toLowerCase()] = fresh;
+          }
+          state.player = fresh.player;
+          state.stats = fresh.stats;
+          state.recentActivity = fresh.recentActivity || [];
+          updateStatsDom();
+        }
+      }).catch(() => {});
+    return;
+  }
+
+  // 2. Instant Pre-Shell Activation (Keeps <h1> rendered for sub-50ms LCP)
+  const homeView = document.getElementById('home-view');
+  if (homeView) homeView.style.display = 'none';
+
+  const profileView = document.getElementById('profile-view');
+  if (profileView) {
+    profileView.style.display = 'block';
+    const sse = document.getElementById('sse-indicator');
+    if (sse) sse.style.display = 'inline-flex';
+    const h1 = document.getElementById('profile-hero-title');
+    if (h1 && (!h1.textContent || h1.textContent === 'Collector')) {
+      h1.textContent = cleanId;
+    }
+    const av = document.getElementById('profile-avatar-char');
+    if (av) av.textContent = cleanId.charAt(0).toUpperCase();
+
+    if (showLoading) {
+      const tabContent = document.getElementById('tab-content');
+      if (tabContent) {
+        tabContent.innerHTML = renderLoadingState('Loading items...');
+      }
+    }
+  } else {
+    const appEl = document.getElementById('app');
+    if (appEl && showLoading) {
+      appEl.innerHTML = renderLoadingState('Loading Collection...');
+    }
   }
 
   // Safety watchdog: prevent infinite spinner if network request hangs
@@ -436,13 +452,13 @@ async function loadPlayerProfile(publicPlayerId, showLoading = true) {
     try {
       const loader = document.querySelector('.profile-loader-screen, .catalog-loader');
       if (loader) {
-        renderNetworkError(publicPlayerId, 'The server took too long to respond. Please check your connection or try again.');
+        renderNetworkError(cleanId, 'The server took too long to respond. Please check your connection or try again.');
       }
     } catch (_) {}
   }, 12000);
 
   try {
-    const res = await fetch(`/api/public/players/${encodeURIComponent(publicPlayerId)}`);
+    const res = await fetch(`/api/public/players/${encodeURIComponent(cleanId)}`);
 
     if (state.loadingWatchdogTimer) {
       clearTimeout(state.loadingWatchdogTimer);
@@ -451,31 +467,35 @@ async function loadPlayerProfile(publicPlayerId, showLoading = true) {
 
     if (res.status === 404) {
       try { closeSse(); } catch (_) {}
-      renderProfileNotFound(publicPlayerId);
+      renderProfileNotFound(cleanId);
       return;
     }
 
     if (res.status >= 500 || !res.ok) {
       try { closeSse(); } catch (_) {}
-      renderServerError(publicPlayerId, 'The collection database is temporarily unavailable. Please try again in a few moments.');
+      renderServerError(cleanId, 'The collection database is temporarily unavailable. Please try again in a few moments.');
       return;
     }
 
     const data = await res.json();
+    state.profileCache[cleanId.toLowerCase()] = data;
+    if (data.player?.publicPlayerId) {
+      state.profileCache[data.player.publicPlayerId.toLowerCase()] = data;
+    }
     state.player = data.player;
     state.stats = data.stats;
     state.recentActivity = data.recentActivity || [];
 
     renderProfileShell();
     loadCurrentTab();
-    setupSse(publicPlayerId);
+    setupSse(data.player.publicPlayerId || cleanId);
   } catch (err) {
     if (state.loadingWatchdogTimer) {
       clearTimeout(state.loadingWatchdogTimer);
       state.loadingWatchdogTimer = null;
     }
     try { closeSse(); } catch (_) {}
-    renderNetworkError(publicPlayerId, 'Unable to connect to the collection server. Please check your internet connection.');
+    renderNetworkError(cleanId, 'Unable to connect to the collection server. Please check your internet connection.');
   }
 }
 
@@ -492,11 +512,35 @@ function loadCurrentTab() {
 
 async function loadCollectionCategory(publicPlayerId, category, showLoading = true) {
   const tabContent = document.getElementById('tab-content');
+  const { rarity, status, sort, search } = state.filters;
+  const cacheKey = `${publicPlayerId}:${category}:${rarity}:${status}:${sort}`;
+
+  // Instant render from client cache (0ms)
+  if (state.tabCache[cacheKey]) {
+    state.collection = state.tabCache[cacheKey];
+    renderCollectionItems(state.tabCache[cacheKey], search);
+
+    // Silent background revalidation
+    let revalUrl = `/api/public/players/${publicPlayerId}/collection?category=${category}&sort=${sort}`;
+    if (rarity !== 'all') revalUrl += `&rarity=${rarity}`;
+    if (status !== 'all') revalUrl += `&status=${status}`;
+
+    fetch(revalUrl)
+      .then(r => r.ok ? r.json() : null)
+      .then(fresh => {
+        if (fresh) {
+          state.tabCache[cacheKey] = fresh;
+          state.collection = fresh;
+          renderCollectionItems(fresh, state.filters.search);
+        }
+      }).catch(() => {});
+    return;
+  }
+
   if (showLoading && tabContent) {
     tabContent.innerHTML = renderLoadingState(`Loading ${category} catalog...`);
   }
 
-  const { rarity, status, sort, search } = state.filters;
   let url = `/api/public/players/${publicPlayerId}/collection?category=${category}&sort=${sort}`;
   if (rarity !== 'all') url += `&rarity=${rarity}`;
   if (status !== 'all') url += `&status=${status}`;
@@ -504,6 +548,7 @@ async function loadCollectionCategory(publicPlayerId, category, showLoading = tr
   try {
     const res = await fetch(url);
     const data = await res.json();
+    state.tabCache[cacheKey] = data;
     state.collection = data;
 
     renderCollectionItems(data, search);
@@ -516,6 +561,26 @@ async function loadCollectionCategory(publicPlayerId, category, showLoading = tr
 
 async function loadAchievements(publicPlayerId, showLoading = true) {
   const tabContent = document.getElementById('tab-content');
+  const cacheKey = `${publicPlayerId}:achievements`;
+
+  // Instant render from client cache (0ms)
+  if (state.tabCache[cacheKey]) {
+    state.achievements = state.tabCache[cacheKey];
+    renderAchievementsTab(state.tabCache[cacheKey]);
+
+    // Silent background revalidation
+    fetch(`/api/public/players/${publicPlayerId}/achievements`)
+      .then(r => r.ok ? r.json() : null)
+      .then(fresh => {
+        if (fresh) {
+          state.tabCache[cacheKey] = fresh;
+          state.achievements = fresh;
+          renderAchievementsTab(fresh);
+        }
+      }).catch(() => {});
+    return;
+  }
+
   if (showLoading && tabContent) {
     tabContent.innerHTML = renderLoadingState('Loading badges & achievements...');
   }
@@ -523,6 +588,7 @@ async function loadAchievements(publicPlayerId, showLoading = true) {
   try {
     const res = await fetch(`/api/public/players/${publicPlayerId}/achievements`);
     const data = await res.json();
+    state.tabCache[cacheKey] = data;
     state.achievements = data;
 
     renderAchievementsTab(data);
@@ -538,7 +604,19 @@ async function loadAchievements(publicPlayerId, showLoading = true) {
    ========================================================================== */
 
 function renderHomePage() {
+  const homeView = document.getElementById('home-view');
+  const profileView = document.getElementById('profile-view');
+  const sse = document.getElementById('sse-indicator');
+  if (sse) sse.style.display = 'none';
+
+  if (homeView && profileView) {
+    profileView.style.display = 'none';
+    homeView.style.display = 'block';
+    return;
+  }
+
   const appEl = document.getElementById('app');
+  if (!appEl) return;
   appEl.innerHTML = `
     <header class="site-header">
       <div class="container header-inner">
@@ -577,7 +655,6 @@ function renderHomePage() {
       </div>
     </main>
 
-    <!-- Watermark Footer -->
     <footer class="site-watermark">
       <span>made with <span class="heart-icon">❤️</span> by <strong>acrone</strong></span>
     </footer>
@@ -590,64 +667,37 @@ function renderHomePage() {
 
 function renderProfileShell() {
   const { player, stats } = state;
-  const appEl = document.getElementById('app');
+  const homeView = document.getElementById('home-view');
+  let profileView = document.getElementById('profile-view');
+  const sse = document.getElementById('sse-indicator');
+
+  if (homeView) homeView.style.display = 'none';
+  if (sse) sse.style.display = 'inline-flex';
 
   const avatarMarkup = player.avatarUrl
-    ? `<img src="${player.avatarUrl}" class="profile-avatar" alt="${player.displayName}" onerror="this.onerror=null; this.src='/assets/items/fallback_item.svg';"/>`
-    : `<div class="avatar-fallback">${player.displayName.charAt(0).toUpperCase()}</div>`;
+    ? `<img src="${player.avatarUrl}" class="profile-avatar" alt="${escapeHtml(player.displayName)}" onerror="this.onerror=null; this.src='/assets/items/fallback_item.svg';"/>`
+    : `<div class="avatar-fallback">${escapeHtml(player.displayName.charAt(0).toUpperCase())}</div>`;
 
-  appEl.innerHTML = `
-    <!-- Sticky Navigation Header -->
-    <header class="site-header">
-      <div class="container header-inner">
-        <a href="/" class="brand-logo" onclick="event.preventDefault(); navigate('/');">
-          <div class="brand-icon">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#FFF" stroke-width="2.5"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
-          </div>
-          <div><span class="brand-text-accent">COLLECTION</span></div>
-        </a>
+  // If profileView already exists in DOM, update properties without destroying h1
+  if (profileView) {
+    profileView.style.display = 'block';
 
-        <div class="header-status-badge" id="sse-indicator">
-          <span class="pulse-dot"></span> Live Sync Active
-        </div>
-      </div>
-    </header>
+    const h1 = document.getElementById('profile-hero-title');
+    if (h1) h1.textContent = player.displayName;
 
-    <main class="container page-main">
-      <!-- Profile Hero Banner -->
-      <section class="profile-hero">
-        <div class="profile-identity">
-          <div class="profile-avatar-wrap">
-            ${avatarMarkup}
-          </div>
-          <div class="profile-meta">
-            <h1>${escapeHtml(player.displayName)}</h1>
-            <div class="profile-role-badge">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
-              ${player.titleBadge || 'Collector'}
-            </div>
-          </div>
-        </div>
+    const avContainer = document.getElementById('profile-avatar-container');
+    if (avContainer) avContainer.innerHTML = avatarMarkup;
 
-        <div class="profile-actions">
-          <div class="profile-balance-widget">
-            <span class="balance-badge-label">BALANCE</span>
-            <span class="balance-badge-val" id="hero-balance-val">${Number(player.balance || 0).toLocaleString()}</span>
-          </div>
-          <button class="btn-action" onclick="copyProfileLink()">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-            <span id="copy-btn-text">Share Profile</span>
-          </button>
-        </div>
-      </section>
+    const roleText = document.getElementById('profile-role-text');
+    if (roleText) roleText.textContent = player.titleBadge || 'Collector';
 
-      <!-- Overview Stats Grid -->
-      <section class="stats-grid" id="stats-grid-container">
-        <!-- Rendered by updateStatsDom() -->
-      </section>
+    const bal = document.getElementById('profile-hero-balance') || document.getElementById('hero-balance-val');
+    if (bal) bal.textContent = Number(player.balance || 0).toLocaleString();
 
-      <!-- Tabs Navigation -->
-      <nav class="tabs-nav" id="category-tabs">
+    const tabsNav = document.getElementById('category-tabs');
+    if (tabsNav && stats?.categories) {
+      tabsNav.style.display = 'flex';
+      tabsNav.innerHTML = `
         <button class="tab-btn" data-tab="overview" onclick="switchTab('overview')">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
           Overview
@@ -667,19 +717,79 @@ function renderProfileShell() {
         <button class="tab-btn" data-tab="achievements" onclick="switchTab('achievements')">
           🏆 Achievements
         </button>
-      </nav>
-
-      <!-- Tab Content Area -->
-      <section id="tab-content">
-        <!-- Injected dynamically -->
-      </section>
-    </main>
-
-    <!-- Item Detail Modal -->
-    <div class="modal-overlay" id="item-modal" onclick="closeModalOnBackdrop(event)">
-      <div class="modal-box" id="modal-box"></div>
-    </div>
-  `;
+      `;
+    }
+  } else {
+    // Full rebuild fallback if navigating from an error page
+    const appEl = document.getElementById('app');
+    appEl.innerHTML = `
+      <header class="site-header">
+        <div class="container header-inner">
+          <a href="/" class="brand-logo" onclick="event.preventDefault(); navigate('/');">
+            <div class="brand-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#FFF" stroke-width="2.5"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+            </div>
+            <div><span class="brand-text-accent">COLLECTION</span></div>
+          </a>
+          <div class="header-status-badge" id="sse-indicator">
+            <span class="pulse-dot"></span> Live Sync Active
+          </div>
+        </div>
+      </header>
+      <main class="container page-main">
+        <div id="profile-view">
+          <section class="profile-hero">
+            <div class="profile-identity">
+              <div class="profile-avatar-wrap" id="profile-avatar-container">${avatarMarkup}</div>
+              <div class="profile-meta">
+                <h1 id="profile-hero-title">${escapeHtml(player.displayName)}</h1>
+                <div class="profile-role-badge">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+                  <span id="profile-role-text">${player.titleBadge || 'Collector'}</span>
+                </div>
+              </div>
+            </div>
+            <div class="profile-actions">
+              <div class="profile-balance-widget">
+                <span class="balance-badge-label">BALANCE</span>
+                <span class="balance-badge-val" id="profile-hero-balance">${Number(player.balance || 0).toLocaleString()}</span>
+              </div>
+              <button class="btn-action" onclick="copyProfileLink()">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                <span id="copy-btn-text">Share Profile</span>
+              </button>
+            </div>
+          </section>
+          <section class="stats-grid" id="stats-grid-container"></section>
+          <nav class="tabs-nav" id="category-tabs">
+            <button class="tab-btn" data-tab="overview" onclick="switchTab('overview')">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
+              Overview
+            </button>
+            <button class="tab-btn" data-tab="fish" onclick="switchTab('fish')">
+              🐟 Fish Collection
+              <span class="tab-count" id="fish-tab-count">${stats.categories.fish.discovered}/${stats.categories.fish.total}</span>
+            </button>
+            <button class="tab-btn" data-tab="mining" onclick="switchTab('mining')">
+              ⛏️ Mining Collection
+              <span class="tab-count" id="mining-tab-count">${stats.categories.mining.discovered}/${stats.categories.mining.total}</span>
+            </button>
+            <button class="tab-btn" data-tab="chest" onclick="switchTab('chest')">
+              📦 Mystery Chest Finds
+              <span class="tab-count" id="chest-tab-count">${stats.categories.chest.discovered}/${stats.categories.chest.total}</span>
+            </button>
+            <button class="tab-btn" data-tab="achievements" onclick="switchTab('achievements')">
+              🏆 Achievements
+            </button>
+          </nav>
+          <section id="tab-content"></section>
+        </div>
+      </main>
+      <div class="modal-overlay" id="item-modal" onclick="closeModalOnBackdrop(event)">
+        <div class="modal-box" id="modal-box"></div>
+      </div>
+    `;
+  }
 
   updateStatsDom();
   updateSseIndicator();

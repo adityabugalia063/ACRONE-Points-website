@@ -4,6 +4,7 @@ import { AchievementService } from '../services/achievementService.js';
 import { verifyBotAuth } from '../middleware/auth.js';
 import { botRateLimiter } from '../middleware/rateLimiter.js';
 import { queryOne, queryAll } from '../db/index.js';
+import { profileResponseCache, playerCache, searchCache } from '../services/cacheService.js';
 
 export function registerBotRoutes(router) {
   // 1. Health Check (Open to hosting probes & authenticated bot checks)
@@ -63,6 +64,9 @@ export function registerBotRoutes(router) {
         avatarUrl
       });
 
+      profileResponseCache.clear();
+      searchCache.clear();
+
       return res.status(200).json({
         success: true,
         player: result
@@ -100,6 +104,8 @@ export function registerBotRoutes(router) {
         revision: revision || 0,
         eventId
       });
+
+      profileResponseCache.clear();
 
       return res.status(200).json(result);
     } catch (err) {
@@ -207,6 +213,8 @@ export function registerBotRoutes(router) {
         occurredAt
       });
 
+      profileResponseCache.clear();
+
       return res.status(200).json(result);
     } catch (err) {
       const status = err.message.includes('does not exist') ? 404 : 500;
@@ -261,6 +269,7 @@ export function registerBotRoutes(router) {
       }
 
       const result = await InventoryService.commitSale({ reservationId });
+      profileResponseCache.clear();
       return res.status(200).json(result);
     } catch (err) {
       const status = err.code === 'RESERVATION_EXPIRED' ? 410 : 500;
@@ -306,6 +315,7 @@ export function registerBotRoutes(router) {
       }
 
       const result = await AchievementService.syncDirect(youtubeChannelId, achievementId, action || 'unlock');
+      profileResponseCache.clear();
       return res.status(200).json({
         success: true,
         ...result

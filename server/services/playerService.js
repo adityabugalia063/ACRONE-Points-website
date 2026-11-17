@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { queryOne, queryAll, execute } from '../db/index.js';
 import { config } from '../config.js';
 import { sseService } from './sseService.js';
+import { playerCache, searchCache, profileResponseCache } from './cacheService.js';
 
 export class PlayerService {
   /**
@@ -31,6 +32,10 @@ export class PlayerService {
         [cleanName, cleanAvatar, now, now, existing.id]
       );
 
+      playerCache.clear();
+      profileResponseCache.clear();
+      searchCache.clear();
+
       return {
         id: existing.id,
         publicPlayerId: existing.public_player_id,
@@ -51,6 +56,10 @@ export class PlayerService {
       [newId, youtubeChannelId, publicPlayerId, cleanName, cleanAvatar, now, now, now]
     );
 
+    playerCache.clear();
+    profileResponseCache.clear();
+    searchCache.clear();
+
     return {
       id: newId,
       publicPlayerId,
@@ -64,15 +73,25 @@ export class PlayerService {
   static async getPlayerByPublicId(publicPlayerId) {
     if (!publicPlayerId || typeof publicPlayerId !== 'string') return null;
     const clean = publicPlayerId.trim();
+    const cacheKey = clean.toLowerCase();
+    const cached = playerCache.get(cacheKey);
+    if (cached) return cached;
+
+    // Use fast indexed query path
+    const isPublicId = clean.toLowerCase().startsWith('usr_');
     const player = await queryOne(
-      `SELECT id, youtube_channel_id, public_player_id, display_name, avatar_url, balance, balance_revision, balance_updated_at, created_at, updated_at, last_seen_at
-       FROM players 
-       WHERE LOWER(public_player_id) = LOWER(?) OR LOWER(display_name) = LOWER(?)`,
-      [clean, clean]
+      isPublicId
+        ? `SELECT id, youtube_channel_id, public_player_id, display_name, avatar_url, balance, balance_revision, balance_updated_at, created_at, updated_at, last_seen_at
+           FROM players 
+           WHERE public_player_id = ?`
+        : `SELECT id, youtube_channel_id, public_player_id, display_name, avatar_url, balance, balance_revision, balance_updated_at, created_at, updated_at, last_seen_at
+           FROM players 
+           WHERE display_name = ? COLLATE NOCASE OR public_player_id = ?`,
+      isPublicId ? [clean] : [clean, clean]
     );
     if (!player) return null;
 
-    return {
+    const res = {
       id: player.id,
       youtubeChannelId: player.youtube_channel_id,
       publicPlayerId: player.public_player_id,
@@ -85,6 +104,10 @@ export class PlayerService {
       updatedAt: player.updated_at,
       lastSeenAt: player.last_seen_at
     };
+
+    playerCache.set(res.publicPlayerId.toLowerCase(), res);
+    playerCache.set(res.displayName.toLowerCase(), res);
+    return res;
   }
 
   static async getPlayerByYoutubeId(youtubeChannelId) {
@@ -92,48 +115,46 @@ export class PlayerService {
   }
 
   static async getPlayerStats(playerId) {
-    // 1. Total quantity of items currently owned
-    const totalRow = await queryOne(
-      `SELECT COALESCE(SUM(quantity), 0) as total_quantity
-       FROM player_inventory
-       WHERE player_id = ? AND quantity > 0`,
+    // Single-query category aggregation for sub-50ms execution
+    const rows = await queryAll(
+      `SELECT 
+         ci.category,
+         COUNT(DISTINCT ci.id) as total_in_category,
+         COUNT(DISTINCT CASE WHEN pi.quantity > 0 THEN pi.item_id END) as discovered_in_category,
+         COALESCE(SUM(CASE WHEN pi.quantity > 0 THEN pi.quantity ELSE 0 END), 0) as category_quantity
+       FROM catalog_items ci
+       LEFT JOIN player_inventory pi ON ci.id = pi.item_id AND pi.player_id = ?
+       WHERE ci.active = 1
+       GROUP BY ci.category`,
       [playerId]
     );
-    const totalQuantity = Number(totalRow?.total_quantity || 0);
 
-    // 2. Total unique active item types currently owned
-    const uniqueRow = await queryOne(
-      `SELECT COUNT(DISTINCT pi.item_id) as unique_types
-       FROM player_inventory pi
-       JOIN catalog_items ci ON pi.item_id = ci.id
-       WHERE pi.player_id = ? AND pi.quantity > 0 AND ci.active = 1`,
-      [playerId]
-    );
-    const uniqueItemTypes = Number(uniqueRow?.unique_types || 0);
-
-    // 3. Category breakdown
     const categories = ['fish', 'mining', 'chest'];
     const categoryStats = {};
     let totalActiveAcrossAll = 0;
     let totalDiscoveredAcrossAll = 0;
+    let totalQuantity = 0;
+    let uniqueItemTypes = 0;
+
+    const rowMap = new Map();
+    for (const r of rows) {
+      rowMap.set(r.category, r);
+    }
 
     for (const cat of categories) {
-      const discRow = await queryOne(
-        `SELECT COUNT(DISTINCT pi.item_id) as discovered
-         FROM player_inventory pi
-         JOIN catalog_items ci ON pi.item_id = ci.id
-         WHERE pi.player_id = ? AND ci.category = ? AND pi.quantity > 0 AND ci.active = 1`,
-        [playerId, cat]
-      );
-      const discovered = Number(discRow?.discovered || 0);
+      const r = rowMap.get(cat) || {
+        total_in_category: 0,
+        discovered_in_category: 0,
+        category_quantity: 0
+      };
+      const total = Number(r.total_in_category || 0);
+      const discovered = Number(r.discovered_in_category || 0);
+      const qty = Number(r.category_quantity || 0);
 
-      const totalRowCat = await queryOne(
-        `SELECT COUNT(*) as total
-         FROM catalog_items
-         WHERE category = ? AND active = 1`,
-        [cat]
-      );
-      const total = Number(totalRowCat?.total || 0);
+      totalActiveAcrossAll += total;
+      totalDiscoveredAcrossAll += discovered;
+      totalQuantity += qty;
+      uniqueItemTypes += discovered;
 
       const pct = total > 0 ? Math.round((discovered / total) * 1000) / 10 : 0;
 
@@ -142,9 +163,6 @@ export class PlayerService {
         total,
         completionPercentage: pct
       };
-
-      totalActiveAcrossAll += total;
-      totalDiscoveredAcrossAll += discovered;
     }
 
     const overallPct =
@@ -197,7 +215,12 @@ export class PlayerService {
 
   static async searchPlayers(query, limit = 10) {
     if (!query || typeof query !== 'string') return [];
-    const clean = `%${query.trim()}%`;
+    const term = query.trim().toLowerCase();
+    const cacheKey = term + '_' + limit;
+    const cached = searchCache.get(cacheKey);
+    if (cached) return cached;
+
+    const clean = `%${term}%`;
     const rows = await queryAll(
       `SELECT public_player_id, display_name, avatar_url, updated_at
        FROM players
@@ -207,12 +230,15 @@ export class PlayerService {
       [clean, clean, limit]
     );
 
-    return rows.map((p) => ({
+    const mapped = rows.map((p) => ({
       publicPlayerId: p.public_player_id,
       displayName: p.display_name,
       avatarUrl: p.avatar_url,
       profileUrl: `/u/${p.public_player_id}`
     }));
+
+    searchCache.set(cacheKey, mapped);
+    return mapped;
   }
 
   /**
@@ -355,6 +381,9 @@ export class PlayerService {
        WHERE id = ?`,
       [numBalance, numRevision, now, now, player.id]
     );
+
+    playerCache.clear();
+    profileResponseCache.clear();
 
     // Broadcast SSE update to public profile in real-time
     try {
